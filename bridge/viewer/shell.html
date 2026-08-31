@@ -77,8 +77,9 @@
   .ov-link:focus-visible{outline:3px solid #6b4dff;outline-offset:2px;text-indent:0}
 
   /* ---- chrome ----
-     A CENTRED PILL, and PERMANENTLY VISIBLE — never opacity-faded, never
-     pointer-events:none, never hidden when the overview opens.
+     THREE PILLS — gallery, nav, fullscreen, in that order — and PERMANENTLY
+     VISIBLE: never opacity-faded, never pointer-events:none, never hidden
+     when the overview opens.
 
      The previous full-width bar hid itself on `mouseleave` from #stage. Because
      the bar overlays the stage, reaching for a button IS a mouseleave: the bar
@@ -87,16 +88,24 @@
      left 11% edge zone, so a click aimed at Next, All slides or Full ran prev()
      instead — which is exactly what "the controls don't work and it jumps
      backwards" was. A control that disappears when you reach for it cannot be
-     fixed by adjusting the timing; it has to stop disappearing. */
+     fixed by adjusting the timing; it has to stop disappearing.
+
+     #chrome is now just the positioning/stacking wrapper — a centred cluster
+     on desktop, 12px between pills. On a narrow viewport it becomes a
+     near-full-width strip instead, and `justify-content:space-between` pushes
+     the three pills out to the edges and the middle, same as any other
+     bottom-sheet control row on a phone. */
   #chrome{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);
-          display:flex;align-items:center;gap:4px;padding:5px;
-          background:var(--chrome-bg);
-          border:1px solid var(--chrome-line);
-          border-radius:var(--r-lg);
-          backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+          display:flex;align-items:center;gap:12px;
           /* Above #grid (z-index 30), so the toolbar stays usable in the
              overview instead of being covered by it. */
           z-index:40}
+
+  .pill{display:flex;align-items:center;gap:4px;padding:5px;
+        background:var(--chrome-bg);
+        border:1px solid var(--chrome-line);
+        border-radius:var(--r-lg);
+        backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
 
   .btn{appearance:none;border:1px solid transparent;background:transparent;
        color:var(--on-chrome);height:34px;min-width:34px;padding:0 9px;
@@ -121,8 +130,6 @@
            color:var(--on-chrome-muted)}
   #counter b{color:var(--on-chrome);font-weight:600}
 
-  .sep{width:1px;height:20px;background:var(--chrome-line);margin:0 3px}
-
   /* There is deliberately NO progress bar. The counter in the toolbar already
      says where you are, and a strip pinned across the top of a slide is another
      fixed element overlaying the stage. */
@@ -136,8 +143,11 @@
 
   @media (max-width:720px){
     #counter{min-width:62px;padding:0 6px}
-    .btn-label{display:none}
     .btn{padding:0 7px}
+    /* Same three pills, but spread to the edges instead of clustered —
+       a full-width strip with the gallery pill left, nav centre, fullscreen
+       right, matching how a bottom-sheet control row reads on a phone. */
+    #chrome{left:16px;right:16px;transform:none;justify-content:space-between}
   }
 
   /* The toolbar is always on top of this (z-index 40), so the last row needs
@@ -180,21 +190,25 @@
 <div id="stage"><div id="deck"></div></div>
 
 <nav id="chrome" aria-label="Deck controls">
-  <button class="btn" id="btnPrev" type="button" aria-label="Previous slide">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
-  </button>
-  <span id="counter" aria-live="polite"></span>
-  <button class="btn" id="btnNext" type="button" aria-label="Next slide">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
-  </button>
-  <span class="sep" aria-hidden="true"></span>
-  <button class="btn" id="btnGrid" type="button" aria-label="Show all slides" aria-pressed="false">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7.5" height="7.5" rx="1"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1"/></svg>
-    <span class="btn-label">All slides</span>
-  </button>
-  <button class="btn" id="btnFull" type="button" aria-label="Toggle fullscreen">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
-  </button>
+  <div class="pill" id="pillGrid">
+    <button class="btn" id="btnGrid" type="button" aria-label="Show all slides" aria-pressed="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7.5" height="7.5" rx="1"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1"/></svg>
+    </button>
+  </div>
+  <div class="pill" id="pillNav">
+    <button class="btn" id="btnPrev" type="button" aria-label="Previous slide">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+    </button>
+    <span id="counter" aria-live="polite"></span>
+    <button class="btn" id="btnNext" type="button" aria-label="Next slide">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+    </button>
+  </div>
+  <div class="pill" id="pillFull">
+    <button class="btn" id="btnFull" type="button" aria-label="Toggle fullscreen">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+    </button>
+  </div>
 </nav>
 
 <div id="grid" hidden aria-label="All slides">

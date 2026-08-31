@@ -88,9 +88,21 @@
   input[type=text]{width:100%;font:inherit;padding:8px 10px;border-radius:var(--r-md);
                    border:1px solid var(--outline);background:var(--bg);color:var(--fg)}
   input[type=text][aria-invalid=true]{border-color:var(--bad)}
+  /* Locked to the remembered slug while linked — still readable and
+     selectable, just not typeable until the tag unlocks it. */
+  input[type=text][readonly]{background:var(--surface);color:var(--muted)}
   .hint{color:var(--muted);margin-top:5px;font-size:11px}
   .hint b{color:var(--accent-blue);font-weight:600}
   .hint.err{color:var(--bad)}
+
+  /* The "Linked" tag sits INSIDE the input, right-aligned — #proj gets extra
+     right padding only while it is shown, so typed text never runs under it. */
+  .proj-wrap{position:relative}
+  input[type=text].has-tag{padding-right:60px}
+  #linked-tag{position:absolute;right:6px;top:50%;transform:translateY(-50%);
+              border:none;cursor:pointer}
+  #linked-tag:hover{filter:brightness(.92)}
+  #linked-tag:focus-visible{outline:3px solid var(--accent);outline-offset:1px}
 
   section.block{margin-top:18px}
   .h{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
@@ -112,6 +124,7 @@
   .tag.bad{background:var(--bad-tint);color:var(--bad)}
   .tag.warn{background:var(--warn-tint);color:var(--warn)}
   .tag.info{background:var(--accent-blue-tint);color:var(--accent-blue)}
+  .tag.ok{background:var(--ok-tint);color:var(--ok)}
 
   /* Zero the checkbox's intrinsic margin so it sits on its column's own edge,
      flush under the header rather than 4px inside it. */
@@ -197,8 +210,19 @@
     <!-- ---------------------------------------------------------- idle -->
     <div id="s-idle">
       <label class="f" for="proj">Project name</label>
-      <input type="text" id="proj" placeholder="kotak-811-pitch" autocomplete="off"
-             spellcheck="false" aria-describedby="projhint">
+      <!-- The "Linked" tag only appears when exactly one SECTION is selected
+           and it was published before (readExportLink, on the main thread) —
+           a single frame or a whole-page export has no stable identity to
+           remember a URL against. While it's showing, #proj is locked to the
+           remembered slug so re-extracting the same section republishes to
+           the same address without retyping it; the tag itself unlocks it. -->
+      <div class="proj-wrap">
+        <input type="text" id="proj" placeholder="enter-preferred-url" autocomplete="off"
+               spellcheck="false" aria-describedby="projhint">
+        <button type="button" class="tag ok" id="linked-tag" hidden
+                aria-label="Linked — click to publish under a different name"
+                title="Linked — click to publish under a different name">Linked</button>
+      </div>
       <div class="hint" id="projhint">Becomes the address. Lowercase letters, numbers and hyphens.</div>
     </div>
 
@@ -279,14 +303,60 @@ const linkOn = new Map();              // linkKey -> boolean
 const grainOf = new Map();             // layerId -> 'auto' | 'coarse' | 'fine'
 const videoFiles = new Map();          // nodeId -> { name, size, bytes }
 
+/* ---------------------------------------------------- remembered export */
+// Live selection: pushed by the plugin whenever the canvas selection changes
+// (see the 'exportLink' case below), so re-selecting a previously-published
+// section shows its URL before Extract is even clicked.
+let linkedUrl = null, linkedSlug = null;
+// The section actually extracted (from plan.meta), carried to publish() so a
+// mid-review selection change on the canvas can't misattribute the new URL.
+let planSectionId = null;
+// What renderLinkedExport() itself typed into #proj, so a later unlinked
+// selection clears only ITS OWN autofill and never something the designer typed.
+let autoFilledSlug = null;
+// True once Edit has been clicked, until the link changes underneath it (a
+// different section gets selected) or a publish re-locks it. Distinguishes
+// "not yet auto-filled" from "deliberately unlocked" — a plain readOnly check
+// can't tell those apart when the linked slug itself hasn't changed.
+let manualEdit = false;
+
 /* ------------------------------------------------------------- helpers */
+
+/** Shows/hides the inline "Linked" tag and locks #proj to match it. */
+function renderLinkedExport() {
+  const tag = $('linked-tag'), input = $('proj');
+  if (!linkedUrl) {
+    tag.hidden = true;
+    input.classList.remove('has-tag');
+    if (!manualEdit && input.value === autoFilledSlug) { input.value = ''; autoFilledSlug = null; syncSlug(); }
+    input.readOnly = false;
+    manualEdit = false;
+    return;
+  }
+  tag.hidden = false;
+  tag.title = 'Linked to ' + linkedUrl + ' — click to publish under a different name';
+  input.classList.add('has-tag');
+  if (state === 'idle' && !manualEdit) {
+    input.value = linkedSlug || '';
+    autoFilledSlug = input.value;
+    input.readOnly = true;
+    syncSlug();
+  }
+}
+$('linked-tag').onclick = () => {
+  manualEdit = true;
+  const input = $('proj');
+  input.readOnly = false;
+  input.focus();
+  input.select();
+};
 
 function show(name) {
   state = name;
   for (const k in screens) screens[k].hidden = (k !== name);
   const p = $('primary'), s = $('secondary');
   s.hidden = (name !== 'review');
-  if (name === 'idle')   { p.textContent = 'Extract deck'; p.disabled = !validSlug(slug()); }
+  if (name === 'idle')   { p.textContent = 'Extract deck'; p.disabled = !validSlug(slug()); renderLinkedExport(); }
   if (name === 'busy')   { p.textContent = 'Working…';     p.disabled = true; }
   if (name === 'review') { p.disabled = false; refreshPrimary(); }
   if (name === 'done')   { p.textContent = 'Publish again'; p.disabled = false; }
@@ -808,7 +878,7 @@ $('secondary').onclick = () => show('idle');
 $('primary').onclick = () => {
   if (state === 'idle') {
     assets = new Map(); images = []; warnings = []; plan = null; payload = null;
-    probeLine = '';
+    probeLine = ''; planSectionId = null;
     linkOn.clear(); grainOf.clear();
     $('busylabel').textContent = 'Extracting the deck';
     $('bar').firstElementChild.style.width = '0';
@@ -908,6 +978,16 @@ async function publish() {
     if (!out.url) throw new Error('bridge returned no url');
     $('liveurl').textContent = out.url;
     $('liveurl').href = out.url;
+    // Remember this URL against the section that was actually extracted, so
+    // re-selecting it next time offers to republish to the same address
+    // instead of starting from a blank project name. Only sections have that
+    // stable identity — see findSlides() on the main thread.
+    if (planSectionId) {
+      parent.postMessage({ pluginMessage: {
+        type: 'rememberExportLink', sectionId: planSectionId, url: out.url, slug: slug(),
+      } }, '*');
+      linkedUrl = out.url; linkedSlug = slug(); manualEdit = false;
+    }
     show('done');
   } catch (err) {
     show('review');
@@ -956,6 +1036,16 @@ onmessage = async (e) => {
     return;
   }
 
+  // Pushed on every canvas selection change (and once on load) — reflects
+  // whatever is selected RIGHT NOW, independent of `plan`/`planSectionId`,
+  // which only update once an extraction actually runs.
+  if (m.type === 'exportLink') {
+    linkedUrl = m.url; linkedSlug = m.slug;
+    if (!linkedUrl) manualEdit = false;   // a fresh, unlinked selection starts clean
+    renderLinkedExport();
+    return;
+  }
+
   if (m.type === 'fatal') {
     show('review');
     $('review-notes').innerHTML = '';
@@ -972,6 +1062,7 @@ onmessage = async (e) => {
 
   if (m.type === 'plan') {
     plan = m;
+    planSectionId = m.meta.sectionId || null;
     $('scope').textContent = m.meta.file + ' · ' + m.meta.slideCount + ' slides · ' +
       (m.meta.slideSize || '') + ' · ordered by ' + (m.meta.orderedBy || '?');
     return;
@@ -1002,5 +1093,6 @@ onmessage = async (e) => {
 
 syncSlug();
 parent.postMessage({ pluginMessage: { type: 'getBridgeHome' } }, '*');  // last-known path, if any
+parent.postMessage({ pluginMessage: { type: 'getExportLink' } }, '*');  // is the current selection linked already?
 probeBridge();                                  // tell the designer up front if the bridge is down
 </script>

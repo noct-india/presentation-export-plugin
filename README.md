@@ -41,6 +41,13 @@ Needs the **Figma desktop app**. Zero-build — no `npm install`, no compile.
 2. Select a section, some slide frames, or just open the deck page
 3. **Plugins → Development → Presentation Export** → **Extract deck**
 
+**Republishing to the same address:** selecting a single SECTION (not loose frames, not the whole
+page) that was published before pre-fills the project name with that slug, locks the field, and
+shows a small **Linked** tag inside it, so Extract → Publish updates the same address instead of
+asking for a name again. The link is written onto the section itself with `setPluginData` — it is
+a fact about the section, not this machine, so it travels with the file to every collaborator who
+opens it. Clicking the **Linked** tag unlocks the field if this publish should move elsewhere.
+
 **To publish** (the extract in step 3 is local and needs none of this): the deck is built and
 deployed by a small local bridge, because a Figma plugin is sandboxed and cannot write files or
 run `surge` itself. Start the bridge by **double-clicking `Start Bridge.cmd`** (Windows) or

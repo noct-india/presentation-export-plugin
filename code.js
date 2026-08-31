@@ -842,14 +842,20 @@ function countLinks(root) {
 function findSlides() {
   var sel = figma.currentPage.selection;
   var pool = [];
+  var section = null;
 
-  if (sel.length === 1 && sel[0].type === 'SECTION') pool = sel[0].children.slice();
+  // A single selected SECTION is the export's identity — the thing a designer
+  // re-selects next time they want to update the same publish. Loose frames or
+  // a whole-page export have no such stable handle, so the remembered-URL
+  // feature below simply does not apply to them.
+  if (sel.length === 1 && sel[0].type === 'SECTION') { pool = sel[0].children.slice(); section = sel[0]; }
   else if (sel.length) pool = sel.slice();
   else pool = figma.currentPage.children.slice();
 
   var part = partitionFrames(pool);
   var found = selectSlides(part.visible);
   found.hiddenFrames = part.hiddenFrames;
+  found.section = section;
   return found;
 }
 
@@ -1146,6 +1152,11 @@ async function run() {
       slideSize: found.modal,
       orderedBy: found.ordered,
       skipped: found.skipped,
+      // Carried through review to the publish step, so "remember this export's
+      // URL" attributes it to the section that was actually extracted — not
+      // whatever happens to be selected on the canvas when Publish is clicked.
+      sectionId: found.section ? found.section.id : null,
+      sectionName: found.section ? found.section.name : null,
     },
     slides: slides,
   });
@@ -1243,13 +1254,75 @@ async function run() {
 // and 'getBridgeHome' messages below.
 var BRIDGE_HOME_KEY = 'presentation-export.bridgeHome';
 
+// setPluginData rather than clientStorage: this is a fact about the SECTION —
+// "this is where this deck lives on the web" — so it belongs on the node and
+// travels with the file to every collaborator who opens it, the same way a
+// component's own plugin data would. clientStorage is per-machine and would
+// leave every other editor of the file with no idea a link exists.
+var EXPORT_LINK_KEY = 'presentationExportLink';
+
+/** The section currently selected alone, or null — the same test findSlides() uses. */
+function selectedSection() {
+  var sel = figma.currentPage.selection;
+  return (sel.length === 1 && sel[0].type === 'SECTION') ? sel[0] : null;
+}
+
+/** Whatever URL is remembered on a section, or all-null fields if none is. */
+function readExportLink(section) {
+  var raw = section ? section.getPluginData(EXPORT_LINK_KEY) : '';
+  if (!raw) return { url: null, slug: null };
+  try {
+    var data = JSON.parse(raw);
+    return { url: data.url || null, slug: data.slug || null };
+  } catch (e) {
+    return { url: null, slug: null };
+  }
+}
+
+/** Pushed on every selection change, so the idle screen can offer the link
+    the moment a previously-published section is re-selected — without the
+    designer having to click Extract first to find out. */
+function reportExportLink() {
+  var section = selectedSection();
+  var link = readExportLink(section);
+  figma.ui.postMessage({
+    type: 'exportLink',
+    sectionId: section ? section.id : null,
+    sectionName: section ? section.name : null,
+    url: link.url,
+    slug: link.slug,
+  });
+}
+
 if (typeof figma !== 'undefined') {
   figma.showUI(__html__, { width: 620, height: 700, themeColors: true });
+  figma.on('selectionchange', reportExportLink);
   figma.ui.onmessage = function (msg) {
     if (msg && msg.type === 'extract') {
       run().catch(function (e) {
         figma.ui.postMessage({ type: 'fatal', error: String(e && e.stack || e) });
       });
+      return;
+    }
+
+    if (msg && msg.type === 'getExportLink') {
+      reportExportLink();
+      return;
+    }
+
+    // Written right after a successful publish, keyed to the section that was
+    // actually extracted (msg.sectionId, carried through from plan.meta) —
+    // not necessarily whatever is selected on the canvas at that instant.
+    if (msg && msg.type === 'rememberExportLink') {
+      if (!msg.sectionId) return;
+      figma.getNodeByIdAsync(msg.sectionId).then(function (node) {
+        if (!node || node.type !== 'SECTION') return;
+        node.setPluginData(EXPORT_LINK_KEY, JSON.stringify({ url: msg.url, slug: msg.slug }));
+        // The designer may still have that same section selected — if so,
+        // the idle screen should reflect the new link immediately rather
+        // than waiting for a selection change that may never come.
+        if (selectedSection() === node) reportExportLink();
+      }).catch(function () {});
       return;
     }
 
