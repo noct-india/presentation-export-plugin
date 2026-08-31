@@ -1,0 +1,7 @@
+# No dependencies today (bridge/README.md: "Zero dependencies: Node built-ins
+# only"), but ignore it anyway so a future `npm install` here never gets
+# committed by accident.
+node_modules/
+bridge/node_modules/
+
+.DS_Store

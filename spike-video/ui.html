@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<!-- Doctype matters: without it the iframe is in quirks mode and tables stop
+     inheriting colour. Learned the hard way in the Phase 2 UI. -->
+<style>
+  :root{
+    --bg:var(--figma-color-bg,#fff); --fg:var(--figma-color-text,#0d0d0f);
+    --muted:var(--figma-color-text-secondary,#5b5d66);
+    --line:var(--figma-color-border,#e2e3e6);
+    --ok:#0f7b3f; --bad:#a5201d; --warn:#8a5a00;
+  }
+  :root.figma-dark{--ok:#7ee2a8;--bad:#ff9b95;--warn:#edc16b}
+  *{box-sizing:border-box}
+  body{margin:0;font:12px/1.5 Inter,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--fg)}
+  .wrap{padding:14px;display:flex;flex-direction:column;gap:10px;height:100vh}
+  h1{font-size:11px;font-weight:600;margin:0;text-transform:uppercase;letter-spacing:.04em}
+  .sub{color:var(--muted);font-size:11px}
+  button{font:inherit;font-weight:600;padding:7px 14px;border-radius:8px;border:1px solid transparent;
+         background:var(--fg);color:var(--bg);cursor:pointer}
+  #out{flex:1;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:10px;
+       font:11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap}
+  .v{padding:9px 11px;border-radius:6px;font-weight:600;margin:8px 0}
+  .v-ok{background:rgba(15,123,63,.12);color:var(--ok)}
+  .v-bad{background:rgba(165,32,29,.12);color:var(--bad)}
+  .v-warn{background:rgba(138,90,0,.12);color:var(--warn)}
+</style>
+
+<div class="wrap">
+  <div>
+    <h1>Video Byte Probe</h1>
+    <div class="sub">Asks the runtime, not the docs. Open the page holding the video, then run.</div>
+  </div>
+  <div><button id="run">Run probe</button></div>
+  <div id="out">Ready.</div>
+</div>
+
+<script>
+const out = document.getElementById('out');
+const media = [];
+let report = '';
+
+function line(s = '') { report += s + '\n'; out.appendChild(document.createTextNode(s + '\n')); out.scrollTop = 1e9; }
+function verdict(cls, t) {
+  const d = document.createElement('div'); d.className = 'v ' + cls; d.textContent = t;
+  out.appendChild(d); out.scrollTop = 1e9; report += '\n>>> ' + t + '\n\n';
+}
+
+document.getElementById('run').onclick = () => {
+  out.textContent = ''; report = ''; media.length = 0;
+  parent.postMessage({ pluginMessage: { type: 'run' } }, '*');
+};
+
+/** Count GIF frames from Graphic Control Extension blocks. */
+function gifFrames(b) {
+  let n = 0;
+  for (let i = 0; i < b.length - 1; i++) if (b[i] === 0x21 && b[i + 1] === 0xF9) n++;
+  return n;
+}
+
+/**
+ * The decisive test for an exported MP4/WEBM: does it actually MOVE?
+ * A poster frozen for N seconds and a real clip have identical duration and
+ * dimensions — only the pixels differ. Sample two timestamps and compare.
+ */
+/** Chrome reports Infinity for streamed WebM until a seek past the end forces
+ *  the real duration to resolve. Without this the motion test silently gives up. */
+function resolveDuration(v) {
+  if (isFinite(v.duration) && v.duration > 0) return Promise.resolve(v.duration);
+  return new Promise(res => {
+    const done = () => { v.removeEventListener('timeupdate', done); res(isFinite(v.duration) ? v.duration : 0); };
+    v.addEventListener('timeupdate', done);
+    try { v.currentTime = 1e6; } catch (e) { res(0); }
+    setTimeout(() => res(isFinite(v.duration) ? v.duration : 0), 4000);
+  });
+}
+
+async function motionOf(bytes, mime) {
+  const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mime }));
+  const v = document.createElement('video');
+  v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = url;
+  try {
+    await new Promise((res, rej) => {
+      v.onloadedmetadata = res;
+      v.onerror = () => rej(new Error('the browser could not decode it'));
+      setTimeout(() => rej(new Error('timed out loading metadata')), 8000);
+    });
+    const dur = await resolveDuration(v);
+    const W = v.videoWidth, H = v.videoHeight;
+    if (!isFinite(dur) || dur === 0) { URL.revokeObjectURL(url); return { dur, W, H, moves: null, why: 'duration never resolved' }; }
+    v.currentTime = 0;
+
+    const grab = (t) => new Promise((res, rej) => {
+      v.onseeked = () => {
+        const c = document.createElement('canvas');
+        c.width = Math.min(W, 160); c.height = Math.min(H, 160);
+        c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+        res(c.getContext('2d').getImageData(0, 0, c.width, c.height).data);
+      };
+      v.onerror = () => rej(new Error('seek failed'));
+      setTimeout(() => rej(new Error('seek timed out')), 8000);
+      v.currentTime = t;
+    });
+
+    const a = await grab(Math.min(0.05, dur * 0.05));
+    const b = await grab(dur * 0.6);
+    let diff = 0;
+    for (let i = 0; i < a.length; i += 4) if (Math.abs(a[i] - b[i]) > 6) diff++;
+    const pct = diff / (a.length / 4) * 100;
+    URL.revokeObjectURL(url);
+    return { dur, W, H, moves: pct > 0.5, changedPct: +pct.toFixed(2) };
+  } catch (e) {
+    URL.revokeObjectURL(url);
+    return { error: e.message };
+  }
+}
+
+onmessage = async (e) => {
+  const m = e.data.pluginMessage;
+  if (!m) return;
+  if (m.type === 'fatal') { verdict('v-bad', 'FATAL: ' + m.error); return; }
+  if (m.type === 'media') { media.push(m); return; }
+  if (m.type !== 'report') return;
+
+  for (const row of m.log) { line(row.k + ' : ' + row.v); }
+  line();
+
+  // Evidence is tracked by KIND, so an inconclusive test can never read as a pass.
+  const ev = { retrieval: [], motion: [], animatedGif: [], inconclusive: [] };
+
+  for (const v of m.videos) {
+    line('=== ' + v.nodeType + ' "' + v.nodeName + '"  ' + v.w + '×' + v.h + ' ===');
+    line('videoHash : ' + v.videoHash);
+    line('VideoPaint properties (own + prototype):');
+    v.paintKeys.forEach(k => line('    ' + k));
+    line();
+    line('retrieval attempts:');
+    for (const a of v.attempts) {
+      line('  ' + (a.ok ? '[ok]  ' : '[fail]') + ' ' + a.label);
+      line('         ' + a.detail);
+      if (a.ok && /^BYTES: /.test(String(a.detail)) && /getVideoBy|getImageByHash/.test(a.label)) {
+        ev.retrieval.push(a.label + ' → ' + a.detail);
+      }
+    }
+    line();
+  }
+
+  /* ---- what did the exported media actually contain? ------------------- */
+  if (media.length) {
+    line('=== exported media, decoded ===');
+    for (const md of media) {
+      if (md.fmt === 'GIF') {
+        const f = gifFrames(md.bytes);
+        line('  ' + md.label + '  ' + (md.bytes.length / 1024).toFixed(0) + ' KB  frames=' + f +
+             (f > 1 ? '  ANIMATED' : '  single frame'));
+        if (f > 1) ev.animatedGif.push(md.label + ' (' + f + ' frames)');
+        continue;
+      }
+      const mime = md.fmt === 'MP4' ? 'video/mp4' : 'video/webm';
+      const r = await motionOf(md.bytes, mime);
+      const kb = (md.bytes.length / 1024).toFixed(0) + ' KB';
+      if (r.error) {
+        line('  ' + md.label + '  ' + kb + '  — ' + r.error);
+        ev.inconclusive.push(md.label + ': ' + r.error);
+        continue;
+      }
+      line('  ' + md.label + '  ' + kb + '  ' + r.W + '×' + r.H + '  ' + (r.dur || 0).toFixed(2) + 's  ' +
+           (r.moves === null ? 'INCONCLUSIVE — ' + r.why
+             : r.moves ? 'MOVES (' + r.changedPct + '% of pixels changed)'
+                       : 'STATIC (' + r.changedPct + '% changed — a frozen frame)'));
+      if (r.moves === null) ev.inconclusive.push(md.label + ': ' + r.why);
+      else if (r.moves) ev.motion.push(md.label + ' (' + r.changedPct + '% changed, ' + r.dur.toFixed(2) + 's)');
+    }
+    line();
+  }
+
+  /* ---- verdict, stated with its evidence ------------------------------ */
+  if (ev.retrieval.length) {
+    verdict('v-ok', 'The ORIGINAL video bytes are retrievable: ' + ev.retrieval.join(' · ') +
+      '. Replace the manual picker with this.');
+  } else if (ev.motion.length) {
+    verdict('v-ok', 'No API returns the original file, but an exported clip genuinely MOVES: ' +
+      ev.motion.join(' · ') + '. That is a re-encode of Figma\'s render, not the source file — ' +
+      'usable, with some quality loss. Picker becomes a fallback.');
+  } else if (ev.animatedGif.length && !ev.inconclusive.length) {
+    verdict('v-warn', 'Only a multi-frame GIF export animates (' + ev.animatedGif.join(' · ') +
+      '). Check it actually shows the video rather than another moving element before trusting it.');
+  } else if (ev.inconclusive.length) {
+    verdict('v-warn', 'INCONCLUSIVE — ' + ev.inconclusive.length + ' test(s) could not be judged: ' +
+      ev.inconclusive.join(' · ') + '. Do not read this as either answer; re-run or inspect by hand.');
+  } else {
+    verdict('v-bad', 'No path returns the original video. Every retrieval method is absent or ' +
+      'returns null, and every exported clip is a frozen frame. The drag-and-drop fallback stays.');
+  }
+  line('(copy this whole report back into the session)');
+};
+</script>

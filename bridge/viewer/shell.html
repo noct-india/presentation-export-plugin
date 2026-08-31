@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>__TITLE__</title>
+<style>
+  /* ---- the animation contract. Do not retune without re-running parity. ---- */
+  :root{
+    --reveal-ms:480ms;
+    --stagger:70ms;
+    --reveal-ease:cubic-bezier(.22,1,.36,1);
+    --ink:#1a1a1a; --paper:#fcfcfc;
+
+    /* Chrome tokens ported from the reference deck, so the toolbar reads the
+       same here as it does at kotak-811-pitch.surge.sh. */
+    --backdrop:#131317; --backdrop-deep:#0b0b0e;
+    --chrome-bg:rgba(24,24,29,.86);
+    --chrome-line:rgba(255,255,255,.12);
+    --chrome-line-strong:rgba(255,255,255,.26);
+    --on-chrome:#f2f2f4;
+    --on-chrome-muted:#a9a9b4;
+    --accent:#ab89ef;          /* violet — "where you are now", nothing else */
+    --r-xs:2px; --r-sm:4px; --r-md:6px; --r-lg:8px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--backdrop);color:var(--on-chrome);overflow:hidden;
+       font:14px/1.5 Lato,-apple-system,"Segoe UI",sans-serif}
+
+  /* #deck must FILL the stage. A grid with place-items:center makes the item
+     shrink-to-fit, so #deck's height:100% resolved against nothing and every
+     slide rendered at a fraction of its size. The slides centre themselves via
+     inset:0 + margin:auto against their own explicit width/height. */
+  #stage{position:fixed;inset:0}
+  #deck{position:absolute;inset:0}
+
+  .slide{position:absolute;inset:0;margin:auto;overflow:hidden;
+         width:min(100vw, calc(100vh * (var(--ar))));
+         height:min(100vh, calc(100vw / (var(--ar))));
+         opacity:0;pointer-events:none;background:var(--paper)}
+  .slide.is-active{opacity:1;pointer-events:auto}
+
+  .slide > img.flat{position:absolute;inset:0;width:100%;height:100%;display:block}
+
+  /* Layers start hidden and transition in on a per-layer delay. The delay is
+     pure CSS — calc(var(--i) * var(--stagger)) — never a per-element JS timer. */
+  .slide > img.layer{position:absolute;display:block;opacity:0;
+                     transform:translateY(14px);will-change:opacity,transform}
+  /* A full-bleed backdrop fades only. Translating it shows the slide edge. */
+  .slide > img.layer.layer-full{transform:none}
+  .slide.is-revealing > img.layer{
+    opacity:1;transform:none;
+    transition:opacity var(--reveal-ms) var(--reveal-ease) calc(var(--i) * var(--stagger)),
+               transform var(--reveal-ms) var(--reveal-ease) calc(var(--i) * var(--stagger));
+  }
+  .slide.is-revealed > img.layer{opacity:1;transform:none;transition:none}
+
+  /* The wrapper IS Figma's clipping window; the media is positioned inside it
+     from the extracted geometry. It used to be a centring grid with a hardcoded
+     object-fit:cover, which crops from the CENTRE — Figma crops from wherever
+     the node sits, so a clipped video was offset by half the overflow. */
+  .ov{position:absolute;overflow:hidden}
+  /* One per clipping ancestor. Each clips what is inside it, so nesting them
+     reproduces the intersection of every shape that cuts the video. */
+  .ov-clip{position:absolute;overflow:hidden}
+  .ov-video video,
+  .ov-video img.ov-fallback{position:absolute;left:0;top:0;display:block}
+  /* Scoped to the DIRECT parent, because the media now lives inside whichever
+     clip wrapper ended up innermost — `.ov` is no longer always its parent. */
+  .ov-fallback{display:none}
+  .is-fallback > video{display:none}
+  .is-fallback > .ov-fallback{display:block}
+  .ov-hit{pointer-events:auto}
+  .ov-link{position:absolute;inset:0;display:block;text-indent:-9999px;
+           overflow:hidden;border-radius:2px}
+  .ov-link:focus-visible{outline:3px solid #6b4dff;outline-offset:2px;text-indent:0}
+
+  /* ---- chrome ----
+     A CENTRED PILL, and PERMANENTLY VISIBLE — never opacity-faded, never
+     pointer-events:none, never hidden when the overview opens.
+
+     The previous full-width bar hid itself on `mouseleave` from #stage. Because
+     the bar overlays the stage, reaching for a button IS a mouseleave: the bar
+     vanished from under the cursor, went pointer-events:none, and the click fell
+     THROUGH to #stage's click-to-advance handler. Every button sat inside the
+     left 11% edge zone, so a click aimed at Next, All slides or Full ran prev()
+     instead — which is exactly what "the controls don't work and it jumps
+     backwards" was. A control that disappears when you reach for it cannot be
+     fixed by adjusting the timing; it has to stop disappearing. */
+  #chrome{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);
+          display:flex;align-items:center;gap:4px;padding:5px;
+          background:var(--chrome-bg);
+          border:1px solid var(--chrome-line);
+          border-radius:var(--r-lg);
+          backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+          /* Above #grid (z-index 30), so the toolbar stays usable in the
+             overview instead of being covered by it. */
+          z-index:40}
+
+  .btn{appearance:none;border:1px solid transparent;background:transparent;
+       color:var(--on-chrome);height:34px;min-width:34px;padding:0 9px;
+       border-radius:var(--r-md);
+       display:inline-flex;align-items:center;justify-content:center;gap:6px;
+       font:500 13px/1 inherit;cursor:pointer;
+       transition:background-color .12s ease,border-color .12s ease}
+  .btn:hover{background:rgba(255,255,255,.08);border-color:var(--chrome-line)}
+  .btn:active{background:rgba(255,255,255,.12)}
+  .btn:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+  /* Never dim with opacity — it stacks with the surface under it and drops the
+     label below AA. A dedicated muted ink instead. */
+  .btn[disabled]{opacity:1;color:#5c5c66;cursor:default;
+                 background:transparent;border-color:transparent}
+  .btn[aria-pressed="true"]{background:rgba(255,255,255,.12);
+                            border-color:var(--chrome-line-strong)}
+  .btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.9;
+           stroke-linecap:round;stroke-linejoin:round}
+
+  #counter{padding:0 10px;min-width:74px;text-align:center;
+           font-variant-numeric:tabular-nums;letter-spacing:.02em;
+           color:var(--on-chrome-muted)}
+  #counter b{color:var(--on-chrome);font-weight:600}
+
+  .sep{width:1px;height:20px;background:var(--chrome-line);margin:0 3px}
+
+  /* There is deliberately NO progress bar. The counter in the toolbar already
+     says where you are, and a strip pinned across the top of a slide is another
+     fixed element overlaying the stage. */
+
+  body.can-prev #stage{cursor:w-resize}
+  body.can-next #stage{cursor:e-resize}
+  /* The overview covers the stage, so the click-to-advance affordance must not
+     survive underneath it — a stuck w-resize cursor promises a click that the
+     gridOpen guard then swallows. */
+  body.is-grid #stage{cursor:default}
+
+  @media (max-width:720px){
+    #counter{min-width:62px;padding:0 6px}
+    .btn-label{display:none}
+    .btn{padding:0 7px}
+  }
+
+  /* The toolbar is always on top of this (z-index 40), so the last row needs
+     clearance or it sits under the pill and cannot be clicked. */
+  #grid{position:fixed;inset:0;background:var(--backdrop-deep);z-index:30;
+        overflow-y:auto;overscroll-behavior:contain;
+        padding:20px clamp(16px,4vw,44px) 96px}
+  #grid[hidden]{display:none}
+  .grid-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;
+             padding:6px 2px 18px;position:sticky;top:-20px;z-index:1;
+             background:linear-gradient(var(--backdrop-deep) 72%,transparent)}
+  .grid-head h1{margin:0;font-size:15px;font-weight:600;letter-spacing:.01em}
+  .grid-head p{margin:0;font-size:12.5px;color:var(--on-chrome-muted)}
+  #gridInner{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(208px,1fr))}
+  .gitem{appearance:none;background:#17171c;border:1px solid var(--chrome-line);
+         border-radius:var(--r-sm);padding:0;cursor:pointer;overflow:hidden;
+         text-align:left;color:inherit;
+         transition:border-color .12s ease,transform .12s ease}
+  .gitem:hover{border-color:var(--chrome-line-strong);transform:translateY(-1px)}
+  .gitem:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+  .gitem img{display:block;width:100%;aspect-ratio:var(--ar);object-fit:cover;background:#fff}
+  .gitem.is-current{border-color:var(--accent)}
+  /* The caption sits ABOVE its thumbnail: a title under one image reads as the
+     caption of the image BELOW it as the eye scans a grid. Above, it labels the
+     thing it belongs to. It comes first in the DOM too, so the accessible name
+     and the reading order agree with what is on screen. */
+  .gcap{display:flex;gap:8px;align-items:baseline;
+        padding:9px 10px 8px;font-size:12px;line-height:1.35;
+        border-bottom:1px solid var(--chrome-line)}
+  .gnum{color:var(--on-chrome-muted);font-variant-numeric:tabular-nums;flex:none}
+  .gitem.is-current .gnum{color:var(--accent)}
+  .gttl{color:#dcdce2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  @media (prefers-reduced-motion: reduce){
+    .slide.is-revealing > img.layer{transition:none}
+  }
+</style>
+</head>
+<body>
+<div id="stage"><div id="deck"></div></div>
+
+<nav id="chrome" aria-label="Deck controls">
+  <button class="btn" id="btnPrev" type="button" aria-label="Previous slide">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+  </button>
+  <span id="counter" aria-live="polite"></span>
+  <button class="btn" id="btnNext" type="button" aria-label="Next slide">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+  </button>
+  <span class="sep" aria-hidden="true"></span>
+  <button class="btn" id="btnGrid" type="button" aria-label="Show all slides" aria-pressed="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7.5" height="7.5" rx="1"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1"/></svg>
+    <span class="btn-label">All slides</span>
+  </button>
+  <button class="btn" id="btnFull" type="button" aria-label="Toggle fullscreen">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+  </button>
+</nav>
+
+<div id="grid" hidden aria-label="All slides">
+  <div class="grid-head">
+    <h1 id="gridTitle">All slides</h1>
+    <p id="gridMeta"></p>
+  </div>
+  <div id="gridInner"></div>
+</div>
+
+<script src="deck-data.js"></script>
+<script>
+/* Viewer shell — ported from the proven Kotak 811 deck, unchanged in behaviour.
+   Everything deck-specific arrives in window.DECK; nothing here is authored per
+   publish. The comments that explain WHY are the point: they record failures
+   that were observed, not anticipated. */
+(function () {
+  "use strict";
+  var DECK = window.DECK || { slides: [], title: "" };
+  var SLIDES = DECK.slides || [];
+  var COUNT = SLIDES.length;
+  var W = DECK.w || 1440, H = DECK.h || 810;
+  var PRELOAD = 2;
+
+  if (!COUNT) { document.body.textContent = "This deck has no slides."; return; }
+  document.documentElement.style.setProperty("--ar", (W / H).toFixed(6));
+
+  var deck = document.getElementById("deck");
+  var counter = document.getElementById("counter");
+  var gridEl = document.getElementById("grid");
+  var gridInner = document.getElementById("gridInner");
+  var btnPrev = document.getElementById("btnPrev");
+  var btnNext = document.getElementById("btnNext");
+  var btnGrid = document.getElementById("btnGrid");
+  var btnFull = document.getElementById("btnFull");
+
+  var slides = [], gridItems = [], current = 0, gridOpen = false;
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function pct(v, total) { return (v / total * 100) + "%"; }
+
+  /**
+   * Corner radius as PERCENTAGES of the element's own box, so it scales with the
+   * deck — a px radius would stay fixed while everything resized around it.
+   * Horizontal and vertical radii are given separately (the `H / V` form): one
+   * percentage resolves against the width on one axis and the height on the
+   * other, which turns a circular corner into an ellipse on any non-square box.
+   */
+  function applyRadius(el, radius, boxW, boxH) {
+    if (!radius || !radius.length || !boxW || !boxH) return;
+    var rh = [], rv = [];
+    for (var i = 0; i < radius.length; i++) {
+      rh.push((radius[i] / boxW * 100) + "%");
+      rv.push((radius[i] / boxH * 100) + "%");
+    }
+    el.style.borderRadius = rh.join(" ") + " / " + rv.join(" ");
+  }
+
+  /**
+   * A rounded rectangle as an SVG path, four independently-radiused corners.
+   * Figma's own corner radii are always circular (unlike the border-radius H/V
+   * percentage split in applyRadius, which exists only to counter CSS's percent
+   * resolving against width on one axis and height on the other) — an SVG path
+   * in the clip's own absolute coordinates has no such distortion to correct
+   * for, so each corner just gets one radius, clamped so opposite corners on
+   * the same edge can never overlap.
+   */
+  function roundedRectPath(w, h, radii) {
+    var tl = Math.max(0, Math.min(radii[0] || 0, w / 2, h / 2));
+    var tr = Math.max(0, Math.min(radii[1] || 0, w / 2, h / 2));
+    var br = Math.max(0, Math.min(radii[2] || 0, w / 2, h / 2));
+    var bl = Math.max(0, Math.min(radii[3] || 0, w / 2, h / 2));
+    return "M" + tl + ",0" +
+      " L" + (w - tr) + ",0 A" + tr + "," + tr + " 0 0 1 " + w + "," + tr +
+      " L" + w + "," + (h - br) + " A" + br + "," + br + " 0 0 1 " + (w - br) + "," + h +
+      " L" + bl + "," + h + " A" + bl + "," + bl + " 0 0 1 0," + (h - bl) +
+      " L0," + tl + " A" + tl + "," + tl + " 0 0 1 " + tl + ",0 Z";
+  }
+
+  /**
+   * A CUSTOM VECTOR MASK, or a rounded rectangle, as an SVG mask-image.
+   *
+   * border-radius only describes rounded rectangles, so a video inside a vector
+   * mask published as a plain box. Figma gives the mask's shape as an SVG path
+   * (`fillGeometry`), and an inline SVG with a viewBox scales to whatever size
+   * the element is — which `clip-path: path()` does NOT, since its coordinates
+   * are fixed user units. That scaling is the whole reason for choosing a mask
+   * image over a clip path here.
+   *
+   * ⚠️ Also applied for a PLAIN RADIUS, redundantly with applyRadius's
+   * border-radius. Safari has never reliably clipped overflow:hidden +
+   * border-radius (WebKit #77572, open since 2011, "will never be fixed") —
+   * especially around a <video>, which can ignore the rounding entirely and
+   * paint as a full rectangle while an <img> in the exact same wrapper clips
+   * correctly. A mask-image on the same element forces Safari onto its
+   * (working) mask-compositing path instead. border-radius stays the primary
+   * declaration — this is a no-op in Chromium/Firefox, which already clip
+   * correctly without it.
+   */
+  function applyMask(el, clip) {
+    if (!clip) return;
+    var svg;
+    if (clip.path && clip.pathBox && clip.pathBox.w && clip.pathBox.h) {
+      svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 " +
+            clip.pathBox.w + " " + clip.pathBox.h + "' preserveAspectRatio='none'>" +
+            "<path d='" + clip.path + "' fill='#fff'/></svg>";
+    } else if (clip.radius && clip.radius.some(function (r) { return r > 0; }) &&
+               clip.rect && clip.rect.w && clip.rect.h) {
+      svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 " +
+            clip.rect.w + " " + clip.rect.h + "' preserveAspectRatio='none'>" +
+            "<path d='" + roundedRectPath(clip.rect.w, clip.rect.h, clip.radius) + "' fill='#fff'/></svg>";
+    } else {
+      return;
+    }
+    var url = "url(\"data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg) + "\")";
+    el.style.webkitMaskImage = url;
+    el.style.maskImage = url;
+    el.style.webkitMaskSize = "100% 100%";
+    el.style.maskSize = "100% 100%";
+    el.style.webkitMaskRepeat = "no-repeat";
+    el.style.maskRepeat = "no-repeat";
+  }
+
+  /* ---------- build slides ---------- */
+  for (var i = 0; i < COUNT; i++) {
+    var D = SLIDES[i];
+    var el = document.createElement("div");
+    el.className = "slide";
+    el.setAttribute("role", "group");
+    el.setAttribute("aria-roledescription", "slide");
+    el.setAttribute("aria-label", (i + 1) + " of " + COUNT + ": " + (D.title || ""));
+    el.setAttribute("aria-hidden", "true");
+
+    /* A slide is layered only if the build emitted layers for it. Every other
+       slide keeps its flat render — which gives any slide that failed
+       verification a free fallback to an image already known to be correct. */
+    var img = null, layers = [];
+    if (D.layers && D.layers.length) {
+      el.style.background = D.bg || "#fcfcfc";
+      for (var q = 0; q < D.layers.length; q++) {
+        var L = D.layers[q];
+        var li = document.createElement("img");
+        li.className = "layer" + (L.full ? " layer-full" : "");
+        li.alt = "";                     // decorative: the slide carries the label
+        li.decoding = "async";
+        li.draggable = false;
+        li.style.left = pct(L.x, W);
+        li.style.top = pct(L.y, H);
+        li.style.width = pct(L.w, W);
+        li.style.height = pct(L.h, H);
+        li.style.setProperty("--i", q);  // set once; the delay is pure CSS
+        // Figma's z-order, so reveal order cannot decide what paints on top.
+        if (typeof L.z === "number") li.style.zIndex = L.z;
+        li.dataset.src = L.src;
+        el.appendChild(li);
+        layers.push(li);
+      }
+    } else {
+      img = document.createElement("img");
+      img.className = "flat";
+      img.alt = D.title || "";
+      img.decoding = "async";
+      img.draggable = false;
+      img.dataset.src = D.flat;
+      el.appendChild(img);
+    }
+
+    var videos = [];
+    var defs = D.overlays || [];
+    for (var j = 0; j < defs.length; j++) {
+      var d = defs[j];
+      var box = document.createElement("div");
+      box.className = "ov " + (d.kind === "video" ? "ov-video" : "ov-hit");
+      box.style.left = pct(d.x, W);
+      box.style.top = pct(d.y, H);
+      box.style.width = pct(d.w, W);
+      box.style.height = pct(d.h, H);
+      /* Paint in FIGMA's order, not DOM order. Layers are appended in reveal
+         order, so without this a video always landed on top of everything and
+         anything drawn over it in Figma was buried underneath. */
+      if (typeof d.z === "number") box.style.zIndex = d.z;
+
+      /* Corner radius, as PERCENTAGES of the overlay's own box so it scales with
+         the deck — a px radius would stay fixed while everything around it
+         resized. Horizontal and vertical radii are given separately (the
+         `H / V` form): one percentage resolves against the width on one axis and
+         the height on the other, which turns a circular corner into an ellipse
+         on any video that is not square. A layer bitmap carries its own rounding
+         in its pixels; a live <video> cannot, so it has to be applied here. */
+      /* An older deck rounds its own box here; a deck carrying `clips` does it
+         per wrapper instead, where the ancestors' shapes are also applied. */
+      if (!(d.clips && d.clips.length)) {
+        applyRadius(box, d.radius, d.w, d.h);
+        applyMask(box, { rect: { w: d.w, h: d.h }, radius: d.radius });   // Safari safety net — see applyMask
+      }
+
+      if (d.kind === "link") {
+        var a = document.createElement("a");
+        a.className = "ov-link";
+        a.href = d.href;
+        a.textContent = d.label || "Link";
+        a.setAttribute("aria-label", d.label || d.href);
+        if (/^https?:/i.test(d.href)) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
+        box.appendChild(a);
+      } else if (d.kind === "video") {
+        var v = document.createElement("video");
+        /* muted MUST be set before a source is attached: the autoplay decision
+           is made when resource selection starts, and a video still un-muted at
+           that moment gets refused. */
+        v.muted = true; v.defaultMuted = true; v.setAttribute("muted", "");
+        v.loop = true; v.setAttribute("loop", "");
+        v.autoplay = true; v.setAttribute("autoplay", "");
+        v.playsInline = true; v.setAttribute("playsinline", "");
+        v.setAttribute("webkit-playsinline", "");
+        v.setAttribute("disablepictureinpicture", "");
+        v.setAttribute("disableremoteplayback", "");
+        /* Decorative, like a layer image (li.alt = "" above) — the slide's own
+           title and copy already carry the context, and the raw Figma layer
+           name ("Sequence 01 1") describes nothing a viewer needs. */
+        v.setAttribute("aria-label", "");
+        v.preload = "auto";
+        if (d.poster) v.poster = d.poster;
+
+        var srcs = d.sources || [{ src: d.src, type: "video/mp4" }];
+        for (var s = 0; s < srcs.length; s++) {
+          var so = document.createElement("source");
+          so.src = srcs[s].src; so.type = srcs[s].type;
+          v.appendChild(so);
+        }
+        /* Reproduce Figma's framing. `media` is the media's own box expressed
+           relative to the clipping window, with the object-fit that matches the
+           paint's scaleMode — computed in render.mjs, which is where it can be
+           unit-tested. Percentages of the overlay box, so it scales with the
+           deck at any viewport size. The `clip` form is still honoured for a
+           deck authored against the older hand-written contract. */
+        var m = d.media;
+        if (!m && d.clip) m = { x: 0, y: 0, w: d.clip.w, h: d.clip.h, fit: "cover" };
+        if (!m) m = { x: 0, y: 0, w: d.w, h: d.h, fit: "cover" };
+
+        /* ---- the nest of shapes that cut this video ----
+           A video's shape is rarely its own: a rounded frame with clipsContent,
+           or a mask sibling, is usually what cuts it. One wrapper per clip,
+           each positioned inside the previous, reproduces the intersection
+           exactly at any depth — CSS never has to intersect anything itself.
+           Positions are percentages of the PARENT wrapper, so the whole nest
+           scales with the deck. */
+        var host = box, hostRect = { x: d.x, y: d.y, w: d.w, h: d.h };
+        var clips = d.clips || [];
+        for (var ci = 0; ci < clips.length; ci++) {
+          var c = clips[ci];
+          if (!c || !c.rect) continue;
+          var w = document.createElement("div");
+          w.className = "ov-clip";
+          w.style.left = ((c.rect.x - hostRect.x) / hostRect.w * 100) + "%";
+          w.style.top = ((c.rect.y - hostRect.y) / hostRect.h * 100) + "%";
+          w.style.width = (c.rect.w / hostRect.w * 100) + "%";
+          w.style.height = (c.rect.h / hostRect.h * 100) + "%";
+          applyRadius(w, c.radius, c.rect.w, c.rect.h);
+          applyMask(w, c);
+          host.appendChild(w);
+          host = w; hostRect = c.rect;
+        }
+
+        /* The media is placed against whatever ended up innermost, so the same
+           maths serves a bare video and one buried under several clips. */
+        var place = function (el) {
+          el.style.left = ((d.x + m.x - hostRect.x) / hostRect.w * 100) + "%";
+          el.style.top = ((d.y + m.y - hostRect.y) / hostRect.h * 100) + "%";
+          el.style.width = (m.w / hostRect.w * 100) + "%";
+          el.style.height = (m.h / hostRect.h * 100) + "%";
+          el.style.objectFit = m.fit || "cover";
+        };
+        place(v);
+        /* A container the browser cannot decode fails FAST and definitively —
+           no watchdog needed and none would help, since the clip never starts.
+           Swapping on the error is what stops an undecodable video reading as a
+           collapsed empty box instead of the frame Figma drew. */
+        v.addEventListener("error", function () { useFallback(v); });
+        host.appendChild(v);
+
+        if (d.fallback) {
+          var fb = document.createElement("img");
+          fb.className = "ov-fallback";
+          fb.alt = "";                  // decorative, same as the video it replaces
+          fb.decoding = "async";
+          place(fb);
+          fb.dataset.src = d.fallback;    // loaded only if the video is refused
+          host.appendChild(fb);           // same wrapper as the video it replaces
+        }
+        videos.push(v);
+      }
+      el.appendChild(box);
+    }
+
+    deck.appendChild(el);
+    slides.push({ el: el, img: img, layers: layers, videos: videos, n: i + 1,
+                  flat: D.flat, timer: null, failsafe: null });
+  }
+
+  /* ---------- overview grid ---------- */
+  document.getElementById("gridTitle").textContent = DECK.title || "All slides";
+  document.getElementById("gridMeta").innerHTML =
+    COUNT + " slide" + (COUNT === 1 ? "" : "s") + " · press <b>Esc</b> to close";
+
+  for (var k = 0; k < COUNT; k++) {
+    (function (idx) {
+      var b = document.createElement("button");
+      b.className = "gitem"; b.type = "button";
+      b.setAttribute("aria-label", "Go to slide " + (idx + 1) + ": " + (SLIDES[idx].title || ""));
+
+      /* Caption BEFORE the thumbnail — above it on screen, and first in the
+         reading order, so a screen reader hears the label before the image it
+         labels rather than after. */
+      var cap = document.createElement("span");
+      cap.className = "gcap";
+      var gn = document.createElement("span"); gn.className = "gnum"; gn.textContent = pad(idx + 1);
+      var gt = document.createElement("span"); gt.className = "gttl"; gt.textContent = SLIDES[idx].title || "";
+      cap.appendChild(gn); cap.appendChild(gt);
+      b.appendChild(cap);
+
+      var ti = document.createElement("img");
+      ti.src = SLIDES[idx].flat; ti.alt = ""; ti.loading = "lazy"; ti.decoding = "async";
+      b.appendChild(ti);
+
+      b.addEventListener("click", function () { closeGrid(); go(idx); });
+      gridInner.appendChild(b);
+      gridItems.push(b);
+    })(k);
+  }
+
+  /* ---------- image loading window ---------- */
+  function loadSlide(s) {
+    if (s.img) { if (!s.img.getAttribute("src")) s.img.src = s.img.dataset.src; return; }
+    for (var i = 0; i < s.layers.length; i++) {
+      var L = s.layers[i];
+      if (!L.getAttribute("src")) L.src = L.dataset.src;
+    }
+  }
+  function warm(centre) {
+    var lo = Math.max(0, centre - PRELOAD), hi = Math.min(COUNT - 1, centre + PRELOAD);
+    for (var i = lo; i <= hi; i++) loadSlide(slides[i]);
+  }
+
+  /* ---------- video ----------
+     Autoplay is never guaranteed. Muted inline autoplay is normally allowed, but
+     Low Power Mode, data-saver, per-site media settings and some in-app webviews
+     all refuse it, and there is nobody to ask on a shared link. So: attempt,
+     re-attempt on every event that can lift the block, and if the clip still has
+     not moved, swap in a still — an image is not media playback. */
+  function useFallback(v) {
+    var box = v.parentNode;
+    if (!box || box.classList.contains("is-fallback")) return;
+    var fb = box.querySelector("img.ov-fallback");
+    if (!fb) return;
+    if (!fb.getAttribute("src")) fb.src = fb.dataset.src;
+    box.classList.add("is-fallback");
+    try { v.pause(); } catch (e) {}
+  }
+  function attempt(v) {
+    if (!v.isConnected) return;
+    var p; try { p = v.play(); } catch (e) { return; }
+    if (p && typeof p.catch === "function") p.catch(function () {});
+  }
+  function onScreen(v) {
+    var s = v.closest(".slide");
+    return !!s && s.classList.contains("is-active");
+  }
+  /* Did it actually move? `paused === false` is not proof — a refused clip can
+     report playing and never advance, which is exactly how a still frame looks. */
+  function watchdog(v) {
+    var t0 = v.currentTime, tries = 0;
+    (function check() {
+      if (!v.isConnected || !onScreen(v)) return;   // left the slide: not blocked
+      if (v.parentNode.classList.contains("is-fallback")) return;
+      if (v.currentTime !== t0 && !v.paused) return;
+      tries++;
+      if (tries > 3) { useFallback(v); return; }
+      attempt(v);
+      setTimeout(check, 700);
+    })();
+    setTimeout(function () {
+      if (v.isConnected && onScreen(v) && v.currentTime === t0) useFallback(v);
+    }, 3200);
+  }
+  function playFor(idx) {
+    for (var i = 0; i < slides.length; i++) {
+      var vids = slides[i].videos;
+      for (var j = 0; j < vids.length; j++) {
+        if (i === idx) { attempt(vids[j]); watchdog(vids[j]); }
+        else if (!vids[j].paused) vids[j].pause();
+      }
+    }
+  }
+  /* A user gesture lifts every autoplay block there is — take the first one. */
+  function nudge() {
+    var vids = slides[current] ? slides[current].videos : [];
+    for (var i = 0; i < vids.length; i++) attempt(vids[i]);
+  }
+  ["pointerdown", "keydown", "touchstart"].forEach(function (ev) {
+    document.addEventListener(ev, nudge, { passive: true });
+  });
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) nudge(); });
+
+  /* ---------- staggered reveal ---------- */
+  var REVEAL_MS = 480, STAGGER_MS = 70;
+  var DECODE_GATE_MS = 400, FAILSAFE_MS = 2500;
+  var reducedMotion = window.matchMedia
+    ? window.matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
+
+  function finishReveal(s) {
+    if (!s || !s.layers.length) return;
+    clearTimeout(s.timer); clearTimeout(s.failsafe);
+    s.timer = s.failsafe = null;
+    s.el.classList.remove("is-revealing");
+    s.el.classList.add("is-revealed");
+  }
+  function resetReveal(s) {
+    if (!s || !s.layers.length) return;
+    clearTimeout(s.timer); clearTimeout(s.failsafe);
+    s.timer = s.failsafe = null;
+    s.el.classList.remove("is-revealing", "is-revealed");
+  }
+  function beginReveal(s) {
+    if (slides[current] !== s) return;            // moved on while decoding
+    /* resetReveal clears both classes before every startReveal, so either class
+       here means a build for THIS visit is already under way — do not restart it
+       and re-trigger the transition from zero. */
+    if (s.el.classList.contains("is-revealed") ||
+        s.el.classList.contains("is-revealing")) return;
+    void s.el.offsetWidth;                        // restart the transition
+    s.el.classList.add("is-revealing");
+    s.timer = setTimeout(function () { finishReveal(s); },
+                         REVEAL_MS + s.layers.length * STAGGER_MS + 80);
+  }
+  function startReveal(s) {
+    if (!s || !s.layers.length) return;
+    if (reducedMotion.matches) { s.el.classList.add("is-revealed"); return; }
+    resetReveal(s);
+    loadSlide(s);
+
+    var decoded = s.layers.map(function (im) {
+      if (im.decode) return im.decode().catch(function () {});
+      if (im.complete) return Promise.resolve();
+      return new Promise(function (res) { im.onload = im.onerror = res; });
+    });
+
+    /* Wait for layers to decode so the slide never assembles itself visibly,
+       piece by piece — but NEVER wait indefinitely. A backgrounded or throttled
+       tab can leave decode() unsettled, and gating hard on it left the slide
+       permanently blank. Observed, not hypothetical. Never remove the cap. */
+    Promise.race([
+      Promise.all(decoded),
+      new Promise(function (res) { setTimeout(res, DECODE_GATE_MS); })
+    ]).then(function () { beginReveal(s); });
+
+    s.failsafe = setTimeout(function () {
+      if (slides[current] !== s) return;
+      if (!s.el.classList.contains("is-revealing") &&
+          !s.el.classList.contains("is-revealed")) finishReveal(s);
+    }, FAILSAFE_MS);
+  }
+
+  /* ---------- navigation ---------- */
+  function go(idx, skipHash) {
+    idx = Math.max(0, Math.min(COUNT - 1, idx));
+    if (slides[current]) {
+      slides[current].el.classList.remove("is-active");
+      slides[current].el.setAttribute("aria-hidden", "true");
+      resetReveal(slides[current]);               // replay on every revisit
+    }
+    current = idx;
+    warm(current);
+    var s = slides[current];
+    s.el.classList.add("is-active");
+    s.el.setAttribute("aria-hidden", "false");
+
+    counter.innerHTML = "<b>" + (current + 1) + "</b> / " + COUNT;
+    /* Clamped ends are stated, not just enforced by go()'s Math.max/min — a
+       button that silently does nothing reads as the broken kind of nothing. */
+    btnPrev.disabled = current === 0;
+    btnNext.disabled = current === COUNT - 1;
+    document.title = (current + 1) + " · " + (SLIDES[current].title || "") +
+                     (DECK.title ? " — " + DECK.title : "");
+
+    for (var g = 0; g < gridItems.length; g++) {
+      gridItems[g].classList.toggle("is-current", g === current);
+    }
+    playFor(current);
+    startReveal(s);
+
+    if (!skipHash) {
+      var h = "#" + (current + 1);
+      if (location.hash !== h) history.replaceState(null, "", h);
+    }
+  }
+
+  /* ⚠️ ONE INPUT = ONE SLIDE. Always. Do not reintroduce a branch here.
+
+     These used to snap a running build instead of moving whenever one was in
+     flight — the reference deck's "first press completes the build, the second
+     advances". Ported here it was simply broken: every navigation starts a build
+     that runs for the decode gate plus REVEAL_MS plus the stagger (~1.2s on a
+     three-layer slide), so at any normal clicking pace EVERY first click landed
+     inside one and was swallowed. The deck only moved on the second click, in
+     both directions.
+
+     The behaviour existed so a presenter never waits on an animation. Moving on
+     the first click serves that better than eating the click did: go() resets the
+     outgoing slide's build on its way out, so nothing is left half-drawn. `R`
+     still replays the current slide's build on demand. */
+  function next() { go(current + 1); }
+  function prev() { go(current - 1); }
+
+  /* The toolbar is NOT touched here. It stays visible and interactive over the
+     overview, so "All slides" toggles a view rather than trading one set of
+     controls for another — the button that opened the grid is still there to
+     close it, and prev/next still work behind it. */
+  function openGrid() {
+    gridOpen = true; gridEl.hidden = false;
+    document.body.classList.add("is-grid");
+    btnGrid.setAttribute("aria-pressed", "true");
+    var cur = gridItems[current];
+    if (cur) { cur.scrollIntoView({ block: "center" }); cur.focus({ preventScroll: true }); }
+  }
+  function closeGrid() {
+    gridOpen = false; gridEl.hidden = true;
+    document.body.classList.remove("is-grid");
+    btnGrid.setAttribute("aria-pressed", "false");
+  }
+  function toggleGrid() { gridOpen ? closeGrid() : openGrid(); }
+
+  function toggleFull() {
+    var d = document;
+    if (!d.fullscreenElement && !d.webkitFullscreenElement) {
+      var e = d.documentElement;
+      (e.requestFullscreen || e.webkitRequestFullscreen || function () {}).call(e);
+    } else {
+      (d.exitFullscreen || d.webkitExitFullscreen || function () {}).call(d);
+    }
+  }
+
+  /* ---------- input ---------- */
+  document.addEventListener("keydown", function (e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    var k = e.key;
+    if (k === "Escape") { if (gridOpen) { closeGrid(); e.preventDefault(); } return; }
+    if (k === "ArrowRight" || k === "PageDown" || k === " " || k === "Spacebar" || k === "n") {
+      if (gridOpen) return; next(); e.preventDefault();
+    } else if (k === "ArrowLeft" || k === "PageUp" || k === "p") {
+      if (gridOpen) return; prev(); e.preventDefault();
+    } else if (k === "ArrowDown") { if (gridOpen) return; next(); e.preventDefault(); }
+    else if (k === "ArrowUp") { if (gridOpen) return; prev(); e.preventDefault(); }
+    else if (k === "Home") { go(0); e.preventDefault(); }
+    else if (k === "End") { go(COUNT - 1); e.preventDefault(); }
+    else if (k === "g" || k === "G" || k === "o" || k === "O") { toggleGrid(); e.preventDefault(); }
+    else if (k === "f" || k === "F") { toggleFull(); e.preventDefault(); }
+    else if (k === "r" || k === "R") { startReveal(slides[current]); e.preventDefault(); }
+  });
+
+  btnNext.addEventListener("click", next);
+  btnPrev.addEventListener("click", prev);
+  btnGrid.addEventListener("click", toggleGrid);
+  btnFull.addEventListener("click", toggleFull);
+
+  /* click-to-advance in the outer 11%, but never over something the deck itself
+     made clickable */
+  var EDGE = 0.11;
+  var stage = document.getElementById("stage");
+  function edgeZone(x) {
+    var w = window.innerWidth;
+    if (x < w * EDGE) return -1;
+    if (x > w * (1 - EDGE)) return 1;
+    return 0;
+  }
+  stage.addEventListener("click", function (e) {
+    if (gridOpen) return;
+    /* #chrome and #grid are siblings of #stage, so their clicks never reach
+       here — but only while they are genuinely interactive. This guard is what
+       makes that independent of stacking and pointer-events, which is the pair
+       that let a click on Next arrive here as a prev(). */
+    if (e.target.closest("#chrome, #grid")) return;
+    if (e.target.closest("a, button, video, [role='button']")) return;
+    var z = edgeZone(e.clientX);
+    if (z < 0) prev(); else if (z > 0) next();
+  });
+  /* Cursor affordance only. The toolbar's visibility is NOT driven from here:
+     it used to be, and since the bar overlays the stage, moving onto a button
+     fired mouseleave and hid the thing being reached for. */
+  stage.addEventListener("mousemove", function (e) {
+    var z = e.target.closest("a, button, video") ? 0 : edgeZone(e.clientX);
+    document.body.classList.toggle("can-prev", z < 0 && current > 0);
+    document.body.classList.toggle("can-next", z > 0 && current < COUNT - 1);
+  });
+  stage.addEventListener("mouseleave", function () {
+    document.body.classList.remove("can-prev", "can-next");
+  });
+
+  /* touch: swipe to advance */
+  var tx = null;
+  stage.addEventListener("touchstart", function (e) { tx = e.touches[0].clientX; }, { passive: true });
+  stage.addEventListener("touchend", function (e) {
+    if (tx === null) return;
+    var dx = e.changedTouches[0].clientX - tx;
+    tx = null;
+    if (Math.abs(dx) > 40) { dx < 0 ? next() : prev(); }
+  }, { passive: true });
+
+  var startAt = parseInt((location.hash || "").slice(1), 10);
+  go(isFinite(startAt) && startAt >= 1 ? startAt - 1 : 0, true);
+})();
+</script>
+</body>
+</html>

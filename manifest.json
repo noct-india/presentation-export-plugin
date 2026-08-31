@@ -1,0 +1,13 @@
+{
+  "name": "Presentation Export",
+  "id": "noct-presentation-export",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["http://localhost:3001"],
+    "devAllowedDomains": ["http://localhost:3001"],
+    "reasoning": "Posts the extracted payload to the local Claude bridge, which authors the page and runs the Surge deploy. A plugin is sandboxed with no filesystem or shell, so publishing cannot happen inside Figma. Nothing leaves the designer's machine via this plugin."
+  }
+}

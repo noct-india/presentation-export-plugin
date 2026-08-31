@@ -1,0 +1,12 @@
+{
+  "name": "Video Byte Probe",
+  "id": "noct-presentation-export-video-probe",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["none"],
+    "reasoning": "Read-only runtime probe. Reports into its own UI. No network."
+  }
+}

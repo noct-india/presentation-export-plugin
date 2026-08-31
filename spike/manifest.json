@@ -1,0 +1,12 @@
+{
+  "name": "Phase 0 Spike — Presentation Export",
+  "id": "noct-presentation-export-spike",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["none"],
+    "reasoning": "Spike is read-only and reports into its own UI. No network."
+  }
+}

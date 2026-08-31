@@ -1,0 +1,317 @@
+<style>
+  :root{
+    --bg:var(--figma-color-bg,#fff);
+    --fg:var(--figma-color-text,#0d0d0f);
+    --muted:var(--figma-color-text-secondary,#5b5d66);
+    --line:var(--figma-color-border,#e2e3e6);
+    --ok:#0f7b3f; --bad:#a5201d; --warn:#8a5a00;
+    --accent:#6b4dff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:12px/1.5 Inter,-apple-system,"Segoe UI",sans-serif;
+       background:var(--bg);color:var(--fg)}
+  .wrap{padding:14px;display:flex;flex-direction:column;gap:12px;height:100vh}
+  h1{font-size:12px;font-weight:600;margin:0;letter-spacing:.02em;text-transform:uppercase}
+  .sub{color:var(--muted);font-size:11px}
+  .row{display:flex;gap:8px;align-items:center}
+  button{font:inherit;font-weight:600;padding:7px 14px;border-radius:8px;
+         border:1px solid var(--line);background:var(--fg);color:var(--bg);cursor:pointer}
+  button.ghost{background:transparent;color:var(--fg)}
+  button:disabled{opacity:1;color:var(--muted);background:transparent;cursor:default}
+  label.chk{display:flex;gap:6px;align-items:center;color:var(--muted);cursor:pointer}
+  #out{flex:1;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:10px;
+       font:11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap}
+  .verdict{padding:9px 11px;border-radius:6px;font-weight:600;margin:6px 0}
+  .v-ok{background:rgba(15,123,63,.12);color:var(--ok)}
+  .v-bad{background:rgba(165,32,29,.12);color:var(--bad)}
+  .v-warn{background:rgba(138,90,0,.12);color:var(--warn)}
+  .status{color:var(--muted);font-size:11px;min-height:16px}
+</style>
+
+<div class="wrap">
+  <div>
+    <h1>Phase 0 Spike</h1>
+    <div class="sub">Select the slides to test, or run on the whole page. Read-only.</div>
+  </div>
+
+  <div class="row">
+    <button id="run">Run spike</button>
+    <label class="chk"><input type="checkbox" id="mem"> include memory test (exports every frame)</label>
+  </div>
+
+  <div class="status" id="status"></div>
+  <div id="out">Ready.</div>
+
+  <div class="row">
+    <button class="ghost" id="copy" disabled>Copy report</button>
+  </div>
+</div>
+
+<script>
+const out = document.getElementById('out');
+const statusEl = document.getElementById('status');
+const copyBtn = document.getElementById('copy');
+let report = '';
+
+document.getElementById('run').onclick = () => {
+  out.textContent = '';
+  report = '';
+  copyBtn.disabled = true;
+  parent.postMessage({ pluginMessage: {
+    type: 'run', memory: document.getElementById('mem').checked
+  }}, '*');
+};
+
+copyBtn.onclick = () => {
+  navigator.clipboard.writeText(report);
+  copyBtn.textContent = 'Copied';
+  setTimeout(() => (copyBtn.textContent = 'Copy report'), 1200);
+};
+
+/** Decode a PNG and read what its alpha channel actually contains. */
+async function alphaOf(bytes) {
+  const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
+  const bmp = await createImageBitmap(blob);
+  const cv = document.createElement('canvas');
+  cv.width = bmp.width; cv.height = bmp.height;
+  const cx = cv.getContext('2d', { willReadFrequently: true });
+  cx.drawImage(bmp, 0, 0);
+  const d = cx.getImageData(0, 0, bmp.width, bmp.height).data;
+
+  let min = 255, max = 0, partial = 0, zero = 0;
+  for (let i = 3; i < d.length; i += 4) {
+    const a = d[i];
+    if (a < min) min = a;
+    if (a > max) max = a;
+    if (a === 0) zero++; else if (a < 255) partial++;
+  }
+  const px = d.length / 4;
+  return {
+    min, max,
+    zeroPct: (zero / px * 100),
+    partialPct: (partial / px * 100),
+    corner: { r: d[0], g: d[1], b: d[2], a: d[3] },
+  };
+}
+
+const hex = (c) => '#' + [c.r, c.g, c.b].map(v => v.toString(16).padStart(2, '0')).join('');
+const kb = (n) => (n / 1024).toFixed(0) + ' KB';
+
+// Append, never reassign textContent — a reassignment would wipe every styled
+// verdict div already in the log, leaving only the last one visible.
+function line(s = '') {
+  report += s + '\n';
+  out.appendChild(document.createTextNode(s + '\n'));
+  out.scrollTop = out.scrollHeight;
+}
+function verdict(cls, text) {
+  const div = document.createElement('div');
+  div.className = 'verdict ' + cls;
+  div.textContent = text;
+  out.appendChild(div);
+  out.scrollTop = out.scrollHeight;
+  report += '\n>>> ' + text + '\n\n';
+}
+
+onmessage = async (e) => {
+  const m = e.data.pluginMessage;
+  if (!m) return;
+
+  if (m.type === 'status') { statusEl.textContent = m.text; return; }
+  if (m.type === 'progress') { statusEl.textContent = 'exporting ' + m.done + '/' + m.of + '…'; return; }
+  if (m.type === 'fatal') { statusEl.textContent = ''; line('FATAL: ' + m.error); return; }
+  if (m.type !== 'result') return;
+
+  statusEl.textContent = '';
+  out.textContent = '';
+  report = '';
+
+  line('FILE  ' + m.file + '  /  page "' + m.page + '"');
+  line('SCOPE ' + m.scope + ' — ' + m.nodeCount + ' nodes');
+  line();
+
+  /* ---- A ---------------------------------------------------------------- */
+  line('=== A — does exportAsync give TEXT a real alpha channel? ===');
+  line(m.a.total + ' text nodes found, ' + m.a.sampled + ' sampled');
+  line();
+
+  const TOL = 1.0;
+
+  // Render one batch of samples, returning its alpha and anchor tallies.
+  // `kind` is 'text' or 'shape' — the alpha reading means different things for
+  // each. Opaque TEXT is the defect. Opaque SHAPE is usually just a solid fill
+  // (a slide background, a 1px divider) and is entirely correct.
+  async function renderBatch(samples, kind) {
+    const t = { clean: 0, baked: 0, box: 0, render: 0, neither: 0, tie: 0, empty: 0 };
+
+    for (const s of samples) {
+      if (s.error) { line('  ! ' + s.name + ' — ' + s.error); continue; }
+      const al = await alphaOf(s.data);
+      const declared = s.png ? s.png.colorType : '?';
+      // Corner alpha alone is not enough: on a tightly ink-cropped label the
+      // corner pixel lands ON a glyph and reads a=255. The defect signature is
+      // a=255 AND the corner matching the slide background, so gate on the
+      // presence of genuinely transparent pixels instead.
+      const hasAlpha = al.corner.a === 0 || al.zeroPct > 1;
+      if (kind === 'text') hasAlpha ? t.clean++ : t.baked++;
+      if (al.max === 0) t.empty++;   // trap 3: a fully transparent spacer frame
+
+      // Trap 2: which rect matches the exported pixel size? A node whose box and
+      // render are the SAME SIZE cannot distinguish them — it is a tie and is
+      // evidence for neither. Counting ties as `box` (the tie-break) would
+      // manufacture a conclusion out of nothing.
+      const ex = s.exportCss;
+      let which = '—';
+      if (ex) {
+        const dBox = s.box ? Math.max(Math.abs(s.box.w - ex.w), Math.abs(s.box.h - ex.h)) : 1e9;
+        const dRen = s.render ? Math.max(Math.abs(s.render.w - ex.w), Math.abs(s.render.h - ex.h)) : 1e9;
+        const sameRect = s.box && s.render &&
+          Math.max(Math.abs(s.box.w - s.render.w), Math.abs(s.box.h - s.render.h)) <= TOL;
+        if (sameRect) { which = 'tie (box==render)'; t.tie++; }
+        else if (Math.min(dBox, dRen) > TOL) { which = 'NEITHER'; t.neither++; }
+        else { which = dBox < dRen ? 'box' : 'render'; t[which]++; }
+      }
+
+      const label = kind === 'text'
+        ? (hasAlpha ? '[alpha]' : '[OPAQUE]')
+        : (al.max === 0 ? '[empty]' : hasAlpha ? '[alpha]' : '[solid]');
+
+      line('  ' + label + ' ' + (s.type || '') + ' ' + s.name);
+      line('      png colorType=' + declared + '  alpha min=' + al.min + ' max=' + al.max +
+           '  fully-transparent=' + al.zeroPct.toFixed(1) + '%  partial=' + al.partialPct.toFixed(1) + '%');
+      line('      corner px ' + hex(al.corner) + ' a=' + al.corner.a +
+           (s.bg ? '   slide bg ' + s.bg : '') +
+           (s.colours && s.colours.length ? '   text ' + s.colours.join(',') : ''));
+      if (ex) {
+        line('      export ' + ex.w + 'x' + ex.h +
+             '  box ' + (s.box ? s.box.w + 'x' + s.box.h : '—') +
+             '  render ' + (s.render ? s.render.w + 'x' + s.render.h : '—') +
+             (s.clipped ? '  clipGap ' + s.clipped : '') +
+             '   -> anchor: ' + which);
+      }
+    }
+    return t;
+  }
+
+  const tText = await renderBatch(m.a.samples, 'text');
+
+  line();
+  if (m.a.sampled === 0) {
+    verdict('v-warn', 'A — INCONCLUSIVE: no text nodes in scope. Select slides with text.');
+  } else if (tText.baked === 0) {
+    verdict('v-ok', 'A — CLEAN (' + tText.clean + '/' + m.a.sampled + '). exportAsync returns real alpha. ' +
+      'Drop the matte-recovery stage; retest slide 35.');
+  } else if (tText.clean === 0) {
+    verdict('v-bad', 'A — BAKED (' + tText.baked + '/' + m.a.sampled + '). Same defect as the MCP route. ' +
+      'Port unkey() from build-layers.py.');
+  } else {
+    verdict('v-warn', 'A — MIXED: ' + tText.clean + ' clean, ' + tText.baked +
+      ' opaque. Investigate what differs before Phase 1.');
+  }
+  line('text anchor: box=' + tText.box + '  render=' + tText.render +
+       '  tie=' + tText.tie + '  neither=' + tText.neither +
+       '   (ties prove nothing — box and render were the same size)');
+  line();
+
+  /* ---- A2: non-text, the other half of trap 2 --------------------------- */
+  const shapes = m.a.shapeSamples || [];
+  line('--- A2 — non-text nodes (most-clipped first) ---');
+  line((m.a.shapeTotal || 0) + ' candidates, ' + shapes.length + ' sampled');
+  line('opaque is EXPECTED here — a slide background or a solid divider has no transparency.');
+  line();
+  const tShape = shapes.length
+    ? await renderBatch(shapes, 'shape')
+    : { box: 0, render: 0, neither: 0, tie: 0, empty: 0 };
+  line();
+  line('shape anchor: box=' + tShape.box + '  render=' + tShape.render +
+       '  tie=' + tShape.tie + '  neither=' + tShape.neither);
+  if (tShape.empty) {
+    line('fully transparent (trap 3 spacer frames): ' + tShape.empty + ' — detected by alpha max == 0');
+  }
+  line();
+
+  const decisive = tShape.box + tShape.render;
+  if (!shapes.length) {
+    verdict('v-warn', 'A2 — no non-text nodes in scope. The `box` anchor case stays untested; ' +
+      'run on slides 4 and 41 (decoration circles hanging outside their frame).');
+  } else if (tShape.neither > 0) {
+    verdict('v-bad', 'A2 — ' + tShape.neither + ' node(s) match NEITHER rect. pick_anchor needs a ' +
+      'third rule before Phase 1.');
+  } else if (decisive === 0) {
+    verdict('v-warn', 'A2 — INCONCLUSIVE: all ' + tShape.tie + ' samples had box == render, so ' +
+      'nothing here can tell the two apart. Needs a node genuinely clipped by its parent — ' +
+      'the decoration circles on slides 4 and 41.');
+  } else if (tShape.box > 0 && tShape.render > 0) {
+    verdict('v-ok', 'A2 — BOTH cases occur (box=' + tShape.box + ', render=' + tShape.render +
+      ', ties excluded). pick_anchor must stay a two-candidate match.');
+  } else if (tShape.box > 0) {
+    verdict('v-ok', 'A2 — ' + tShape.box + ' decisive sample(s) matched BOX. exportAsync returns ' +
+      'the unclipped shape, so trap 2 is real for non-text. Keep the two-candidate match.');
+  } else {
+    verdict('v-ok', 'A2 — ' + tShape.render + ' decisive sample(s) matched RENDER, none matched box. ' +
+      'exportAsync CLIPS to the parent: a node hanging outside its frame exports as the visible ' +
+      'sliver, not the whole shape. Anchor on absoluteRenderBounds; keep box only as an assertion ' +
+      'fallback.');
+  }
+  line();
+
+  /* ---- B ---------------------------------------------------------------- */
+  line('=== B — links ===');
+  line('prototype URL actions : ' + m.b.withReactions.length);
+  for (const r of m.b.withReactions) {
+    line('  ' + r.type + ' "' + r.name + '" -> ' + r.urls.join(', ') +
+         (r.insideInstance ? '   [inside an instance]' : '') +
+         (r.isInstanceRoot ? '   [instance root]' : ''));
+  }
+  line('text hyperlinks       : ' + m.b.hyperlinks.length);
+  for (const h of m.b.hyperlinks) {
+    line('  "' + h.text + '" [' + h.start + '-' + h.end + '] ' + h.linkType + ' = ' + h.value);
+  }
+  line();
+  line('instances in scope    : ' + m.b.instanceCount);
+  let subWithReactions = 0;
+  for (const p of m.b.instanceProbe) {
+    subWithReactions += p.sublayersWithReactions;
+    line('  "' + p.name + '"  rootUrls=' + p.rootUrls +
+         '  sublayers=' + p.sublayers +
+         '  withReactions=' + p.sublayersWithReactions +
+         '  withUrls=' + p.sublayersWithUrls);
+  }
+  line();
+  if (m.b.instanceCount === 0) {
+    verdict('v-warn', 'B — instance question UNANSWERED: no instances in scope.');
+  } else if (subWithReactions > 0) {
+    verdict('v-ok', 'B — instance SUBLAYERS do report reactions. Sweep must recurse into instances.');
+  } else {
+    verdict('v-warn', 'B — no sublayer reported reactions. Either they do not surface, or none were ' +
+      'authored. Confirm against an instance you know carries a link on a child.');
+  }
+
+  /* ---- C ---------------------------------------------------------------- */
+  if (m.c) {
+    line('=== C — export memory / time at 2x ===');
+    line('frames: ' + m.c.count + '   exported: ' + m.c.exported +
+         '   total: ' + (m.c.totalBytes / 1024 / 1024).toFixed(1) + ' MB');
+    const times = m.c.rows.map(r => r.ms);
+    if (times.length) {
+      const sum = times.reduce((a, b) => a + b, 0);
+      line('time: total ' + (sum / 1000).toFixed(1) + 's   mean ' + Math.round(sum / times.length) +
+           'ms   slowest ' + Math.max.apply(null, times) + 'ms');
+      const big = m.c.rows.slice().sort((a, b) => b.bytes - a.bytes).slice(0, 5);
+      line('largest: ' + big.map(r => r.name + ' ' + kb(r.bytes)).join(', '));
+    }
+    line();
+    if (m.c.failedAt) {
+      verdict('v-bad', 'C — FAILED at frame ' + m.c.failedAt.i + ' ("' + m.c.failedAt.name +
+        '"): ' + m.c.failedAt.error + '. Cap concurrency and stream each buffer out.');
+    } else {
+      verdict('v-ok', 'C — all ' + m.c.exported + ' frames exported sequentially, no memory error.');
+    }
+  } else {
+    line('=== C — skipped (tick the memory box to run it) ===');
+  }
+
+  copyBtn.disabled = false;
+  statusEl.textContent = 'Done.';
+};
+</script>

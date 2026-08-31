@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<!-- The doctype is load-bearing. Without it the iframe renders in quirks mode,
+     where Chrome's UA stylesheet gives tables `color: -internal-quirk-inherit`
+     and colour stops inheriting into every table — all table text fell back to
+     near-black and vanished against Figma's dark surface. -->
+<style>
+  /* Surfaces come from Figma so the plugin looks native in either theme.
+     Shape, accent budget and contrast follow the NOCT house standard. */
+  :root{
+    --bg:var(--figma-color-bg,#ffffff);
+    --surface:var(--figma-color-bg-secondary,#f5f5f7);
+    --fg:var(--figma-color-text,#0d0d0f);
+    --muted:var(--figma-color-text-secondary,#5b5d66);
+    --line:var(--figma-color-border,#e2e3e6);
+    /* Soft stroke (~1.9:1) — allowed ONLY on controls that also carry a label,
+       so the border is never the sole affordance. */
+    --outline-control:var(--figma-color-border-strong,#b9babe);
+    /* Full-strength border for controls where the box IS the only cue —
+       an empty text input has no label inside it to fall back on. */
+    --outline:var(--figma-color-text-tertiary,#8a8c93);
+
+    /* Violet means NOW and nothing else — the live step, the running bar,
+       focus. Blue carries everything else that means something. */
+    --accent:#6b4dff;
+    --accent-blue:#2563eb;
+    --accent-blue-tint:rgba(37,99,235,.08);
+
+    --ok:#0f7b3f; --bad:#a5201d; --warn:#8a5a00;
+    --bad-tint:rgba(165,32,29,.10);
+    --warn-tint:rgba(138,90,0,.10);
+    --ok-tint:rgba(15,123,63,.10);
+
+    --r-xs:2px; --r-sm:4px; --r-md:6px; --r-lg:8px;   /* never above 8 */
+  }
+
+  /* Surface tokens follow Figma automatically, but the semantic inks do not —
+     values that clear AA on white are 2-3:1 on Figma's #2c2c2c and disappear.
+     Figma sets .figma-dark on <html>; prefers-color-scheme covers running this
+     file outside Figma. Only the tokens are redefined, never a colour's sole
+     definition. */
+  :root.figma-dark{
+    --accent:#a793ff;
+    --accent-blue:#8ab4f8;
+    --accent-blue-tint:rgba(138,180,248,.14);
+    --ok:#7ee2a8; --bad:#ff9b95; --warn:#edc16b;
+    --bad-tint:rgba(255,155,149,.14);
+    --warn-tint:rgba(237,193,107,.14);
+    --ok-tint:rgba(126,226,168,.14);
+    --outline:var(--figma-color-text-tertiary,#8d9099);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not(.figma-light){
+      --accent:#a793ff;
+      --accent-blue:#8ab4f8;
+      --accent-blue-tint:rgba(138,180,248,.14);
+      --ok:#7ee2a8; --bad:#ff9b95; --warn:#edc16b;
+      --bad-tint:rgba(255,155,149,.14);
+      --warn-tint:rgba(237,193,107,.14);
+      --ok-tint:rgba(126,226,168,.14);
+      --outline:var(--figma-color-text-tertiary,#8d9099);
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:12px/1.5 Inter,-apple-system,"Segoe UI",sans-serif;
+       background:var(--bg);color:var(--fg)}
+  .app{display:flex;flex-direction:column;height:100vh}
+
+  header{padding:12px 14px 10px;border-bottom:1px solid var(--line);flex:none}
+  h1{font-size:11px;font-weight:600;margin:0;text-transform:uppercase;letter-spacing:.04em}
+  .sub{color:var(--muted);font-size:11px;margin-top:2px}
+
+  main{flex:1;overflow:auto;padding:14px}
+  footer{flex:none;padding:12px 14px;border-top:1px solid var(--line);
+         display:flex;gap:8px;align-items:center;flex-direction:row-reverse;
+         justify-content:flex-start}
+
+  /* Primary submit is FIRST in the DOM; row-reverse puts it on the right. */
+  button{font:inherit;font-weight:600;padding:7px 14px;border-radius:var(--r-lg);
+         border:1px solid transparent;background:var(--fg);color:var(--bg);cursor:pointer}
+  button.ghost{background:transparent;color:var(--fg);border-color:var(--outline-control)}
+  button.ghost:hover{border-color:var(--line);background:var(--surface)}
+  button[disabled]{background:var(--surface);color:var(--muted);
+                   border-color:var(--line);cursor:default}
+  button:focus-visible,input:focus-visible,select:focus-visible,
+  .drop:focus-visible{outline:3px solid var(--accent);outline-offset:1px}
+
+  label.f{display:block;font-weight:600;margin-bottom:5px}
+  input[type=text]{width:100%;font:inherit;padding:8px 10px;border-radius:var(--r-md);
+                   border:1px solid var(--outline);background:var(--bg);color:var(--fg)}
+  input[type=text][aria-invalid=true]{border-color:var(--bad)}
+  .hint{color:var(--muted);margin-top:5px;font-size:11px}
+  .hint b{color:var(--accent-blue);font-weight:600}
+  .hint.err{color:var(--bad)}
+
+  section.block{margin-top:18px}
+  .h{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+  .h h2{font-size:11px;font-weight:600;margin:0;text-transform:uppercase;letter-spacing:.04em}
+  .h .n{color:var(--muted);font-size:11px}
+
+  table{width:100%;border-collapse:collapse}
+  th{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);
+     text-align:left;font-weight:600;padding:0 8px 6px 0;border-bottom:1px solid var(--line)}
+  td{padding:8px 8px 8px 0;border-bottom:1px solid var(--line);vertical-align:top}
+  tr:last-child td{border-bottom:0}
+  td.slide{color:var(--accent-blue);font-weight:600;white-space:nowrap;width:1%}
+  .url{font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;word-break:break-all;
+       color:var(--muted)}
+  .name{font-weight:600}
+
+  .tag{display:inline-block;font-size:10px;font-weight:600;padding:1px 5px;
+       border-radius:var(--r-xs);text-transform:uppercase;letter-spacing:.03em}
+  .tag.bad{background:var(--bad-tint);color:var(--bad)}
+  .tag.warn{background:var(--warn-tint);color:var(--warn)}
+  .tag.info{background:var(--accent-blue-tint);color:var(--accent-blue)}
+
+  /* Zero the checkbox's intrinsic margin so it sits on its column's own edge,
+     flush under the header rather than 4px inside it. */
+  td input[type=checkbox]{margin:0;width:14px;height:14px;accent-color:var(--accent-blue)}
+
+  .drop{border:1px dashed var(--outline-control);border-radius:var(--r-md);
+        padding:10px;text-align:center;color:var(--muted);cursor:pointer;background:var(--bg)}
+  .drop:hover{border-color:var(--fg);color:var(--fg)}
+  .drop.has{border-style:solid;border-color:var(--accent-blue);
+            background:var(--accent-blue-tint);color:var(--fg)}
+  .drop.over{border-color:var(--accent);border-style:solid}
+
+  select{appearance:none;-webkit-appearance:none;font:inherit;padding:5px 44px 5px 10px;
+         border-radius:var(--r-sm);border:1px solid var(--outline-control);
+         background:var(--bg) no-repeat right 16px center;color:var(--fg);
+         background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%235b5d66' stroke-width='1.5'/%3E%3C/svg%3E")}
+
+  .note{padding:9px 11px;border-radius:var(--r-md);margin:8px 0;font-weight:600}
+  .note.bad{background:var(--bad-tint);color:var(--bad)}
+  .note.warn{background:var(--warn-tint);color:var(--warn)}
+  .note.ok{background:var(--ok-tint);color:var(--ok)}
+  .note .w{font-weight:400;display:block;margin-top:3px}
+
+  /* Bridge status banner only — text above, actions below so a narrow plugin
+     panel never crowds a button against mid-sentence text. */
+  #bridge-warn{display:flex;flex-direction:column;align-items:stretch;gap:8px}
+  #bridge-warn button{padding:5px 10px}
+
+  /* The remembered bridge path can be long — wrap it rather than clipping, and
+     break on separators so it never spills out of the narrow plugin panel. */
+  #bridge-path{padding:7px 8px;border:1px solid var(--line);border-radius:var(--r-sm);
+               background:var(--bg);font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;
+               color:var(--fg);word-break:break-all;user-select:all}
+  #bridge-actions{display:flex;gap:6px}
+  #bridge-actions button{flex:1 1 auto}
+
+  #bar{height:3px;background:var(--line);border-radius:var(--r-xs);overflow:hidden;margin:14px 0 8px}
+  #bar > i{display:block;height:100%;width:0;background:var(--accent);transition:width .12s linear}
+  .status{color:var(--muted);font-size:11px;min-height:16px}
+
+  details{margin-top:14px;border-top:1px solid var(--line);padding-top:10px}
+  summary{cursor:pointer;font-weight:600;color:var(--muted);font-size:11px}
+  pre{font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;
+      margin:8px 0 0;color:var(--muted)}
+
+  .result{text-align:center;padding:28px 14px}
+  .result .live{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+                color:var(--accent)}
+  .result a{display:block;margin:10px 0 4px;font-size:15px;font-weight:600;
+            color:var(--accent-blue);word-break:break-all}
+  [hidden]{display:none !important}
+</style>
+
+<div class="app">
+  <header>
+    <h1>Presentation Export</h1>
+    <div class="sub" id="scope">Select a section, some frames, or open the deck page.</div>
+  </header>
+
+  <main>
+    <!-- Bridge status — probeBridge() unhides this when the local bridge
+         (localhost:3001) is unreachable, so a missing bridge shows on open,
+         not after a whole deck extracts and the publish fails. Lives outside
+         the show()-toggled screens so it is visible on idle and review alike.
+         The button re-runs the same probe on demand, so starting the bridge
+         AFTER opening the plugin does not need a close-and-reopen to notice. -->
+    <div id="bridge-warn" class="note bad" role="status" hidden>
+      <span id="bridge-warn-text"></span>
+      <!-- Only rendered once a bridge has connected at least once — the plugin
+           learns its own folder path from the bridge's /health response, since
+           the sandboxed iframe has no filesystem access and could never work
+           it out on its own. Remembered via clientStorage so it still shows
+           here next time, even though the bridge that reported it is offline
+           right now. -->
+      <div id="bridge-path" hidden></div>
+      <div id="bridge-actions" hidden>
+        <button type="button" class="ghost" id="bridge-copy-path">Copy path</button>
+        <button type="button" class="ghost" id="bridge-copy-command">Copy terminal command</button>
+      </div>
+      <button type="button" class="ghost" id="bridge-recheck">Check again</button>
+    </div>
+
+    <!-- ---------------------------------------------------------- idle -->
+    <div id="s-idle">
+      <label class="f" for="proj">Project name</label>
+      <input type="text" id="proj" placeholder="kotak-811-pitch" autocomplete="off"
+             spellcheck="false" aria-describedby="projhint">
+      <div class="hint" id="projhint">Becomes the address. Lowercase letters, numbers and hyphens.</div>
+    </div>
+
+    <!-- ------------------------------------------------------ progress -->
+    <div id="s-busy" hidden>
+      <div id="busylabel" class="name"></div>
+      <div id="bar"><i></i></div>
+      <div class="status" id="status"></div>
+    </div>
+
+    <!-- -------------------------------------------------------- review -->
+    <div id="s-review" hidden>
+      <div id="review-notes"></div>
+
+      <section class="block" id="blk-links" hidden>
+        <div class="h"><h2>Links</h2><span class="n" id="n-links"></span></div>
+        <table><thead><tr>
+          <th>Slide</th><th>Text</th><th style="width:1%">Include</th>
+        </tr></thead><tbody id="tb-links"></tbody></table>
+      </section>
+
+      <section class="block" id="blk-videos" hidden>
+        <div class="h"><h2>Videos</h2><span class="n" id="n-videos"></span></div>
+        <div class="hint">Figma will not release video bytes, so each clip is supplied here.</div>
+        <table><tbody id="tb-videos"></tbody></table>
+      </section>
+
+      <section class="block" id="blk-grain" hidden>
+        <div class="h"><h2>Reveal grain</h2><span class="n" id="n-grain"></span></div>
+        <div class="hint">Both grains were extracted. <b>Auto</b> lets Claude choose per slide.</div>
+        <table><thead><tr>
+          <th>Slide</th><th>Layer</th><th style="width:1%">Grain</th>
+        </tr></thead><tbody id="tb-grain"></tbody></table>
+      </section>
+
+      <details id="blk-details">
+        <summary>Extraction details</summary>
+        <pre id="details"></pre>
+      </details>
+    </div>
+
+    <!-- -------------------------------------------------------- result -->
+    <div id="s-done" hidden>
+      <div class="result">
+        <div class="live">Live</div>
+        <a id="liveurl" href="#" target="_blank" rel="noopener"></a>
+        <div class="hint">Anyone with this link can open it. No password.</div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Primary FIRST in the DOM so Enter reaches it; row-reverse puts it right. -->
+  <footer>
+    <button id="primary">Extract deck</button>
+    <button class="ghost" id="secondary" hidden>Back</button>
+    <span class="status" id="footnote" style="margin-right:auto"></span>
+  </footer>
+</div>
+
+<script>
+const SCALE = 2, ANCHOR_TOL = 1.0, BRIDGE = 'http://localhost:3001';
+
+/* Advisory Surge-size guard. Surge is a static host, not a video CDN: it rejects
+   a very large deploy with a generic "Deployment did not succeed" only AFTER the
+   whole upload, so an oversized deck fails slowly and opaquely. These thresholds
+   warn the designer before that happens. Advisory, not a hard block — Surge
+   documents no exact number — and web-encoded clips sit well under BIG_CLIP_MB. */
+const BIG_CLIP_MB = 15, MAX_DECK_MB = 50;
+
+const $ = id => document.getElementById(id);
+const screens = { idle: $('s-idle'), busy: $('s-busy'), review: $('s-review'), done: $('s-done') };
+
+let state = 'idle';
+let plan = null, assets = new Map(), images = [], warnings = [], payload = null;
+let probeLine = '';
+let work = Promise.resolve();          // serialises async decoding; see `done`
+const linkOn = new Map();              // linkKey -> boolean
+const grainOf = new Map();             // layerId -> 'auto' | 'coarse' | 'fine'
+const videoFiles = new Map();          // nodeId -> { name, size, bytes }
+
+/* ------------------------------------------------------------- helpers */
+
+function show(name) {
+  state = name;
+  for (const k in screens) screens[k].hidden = (k !== name);
+  const p = $('primary'), s = $('secondary');
+  s.hidden = (name !== 'review');
+  if (name === 'idle')   { p.textContent = 'Extract deck'; p.disabled = !validSlug(slug()); }
+  if (name === 'busy')   { p.textContent = 'Working…';     p.disabled = true; }
+  if (name === 'review') { p.disabled = false; refreshPrimary(); }
+  if (name === 'done')   { p.textContent = 'Publish again'; p.disabled = false; }
+}
+
+const slug = () => $('proj').value.trim().toLowerCase().replace(/\s+/g, '-');
+const validSlug = s => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(s) && s.length >= 3 && s.length <= 63;
+
+function syncSlug() {
+  const s = slug(), ok = validSlug(s), empty = s === '';
+  const hint = $('projhint'), input = $('proj');
+  input.setAttribute('aria-invalid', String(!empty && !ok));
+  hint.className = 'hint' + (!empty && !ok ? ' err' : '');
+  hint.innerHTML = empty
+    ? 'Becomes the address. Lowercase letters, numbers and hyphens.'
+    : ok ? 'Publishes to <b>' + s + '.surge.sh</b>'
+         : 'Lowercase letters, numbers and hyphens only — 3 to 63 characters, not starting or ending with a hyphen.';
+  if (state === 'idle') $('primary').disabled = !ok;
+  if (state === 'review') refreshPrimary();
+}
+
+/** The publish button states what it is about to do, including what is missing. */
+function refreshPrimary() {
+  const p = $('primary');
+  if (!validSlug(slug())) { p.textContent = 'Name the project first'; p.disabled = true; $('footnote').textContent = ''; return; }
+  const pending = [...videoFiles.keys()].length;
+  const need = (payload ? payload.videoRows.length : 0) - pending;
+  p.disabled = false;
+  p.textContent = need > 0 ? 'Publish without ' + need + ' video' + (need > 1 ? 's' : '') : 'Publish to web';
+  $('footnote').textContent = need > 0
+    ? need + ' slide' + (need > 1 ? 's' : '') + ' will show a still frame instead'
+    : '';
+}
+
+function note(parent, cls, title, detail) {
+  const d = document.createElement('div');
+  d.className = 'note ' + cls;
+  d.textContent = title;
+  if (detail) { const s = document.createElement('span'); s.className = 'w'; s.textContent = detail; d.appendChild(s); }
+  parent.appendChild(d);
+}
+
+/* ----------------------------------------------------- bridge home / copy */
+
+// Seeded from clientStorage on load (see the 'getBridgeHome' request below)
+// so it survives the bridge being off — the only time anyone needs to be
+// told where it is — and refreshed from the bridge itself whenever it
+// answers /health, so moving the plugin folder corrects it instead of
+// leaving a stale path behind.
+let bridgeHome = null;
+
+/** Windows, as far as we can tell — for choosing which launcher to name. */
+function isWindows(home) {
+  // A reported path is definitive: only Windows paths carry a drive letter or
+  // a backslash. It also describes the right machine, because the bridge that
+  // reported it was running on this one.
+  if (home) return /^[a-zA-Z]:[\\/]/.test(home) || home.includes('\\');
+  // No connection yet, so fall back to what the iframe can see about itself.
+  const platform = (navigator.platform || '').toLowerCase();
+  const agent = (navigator.userAgent || '').toLowerCase();
+  return platform.startsWith('win') || agent.includes('windows');
+}
+
+/** The launcher's full path, ready to double-click. */
+function launcherPath(home, win) {
+  const sep = win ? '\\' : '/';
+  const name = win ? 'Start Bridge.cmd' : 'Start Bridge.command';
+  return home.replace(/[\\/]+$/, '') + sep + name;
+}
+
+/** Portable equivalent, for anyone who would rather use a terminal. */
+function terminalCommand(home, win) {
+  return win
+    ? 'cd /d "' + home + '" && node bridge\\server.mjs'
+    : 'cd "' + home + '" && node bridge/server.mjs';
+}
+
+/**
+ * Copies without the Clipboard API.
+ *
+ * `navigator.clipboard` is unreliable inside the plugin iframe — it is a
+ * permissioned API and the iframe's origin is null. The textarea trick has no
+ * such requirement and works in both the desktop app and the browser.
+ */
+function copyText(text) {
+  const field = document.createElement('textarea');
+  field.value = text;
+  field.setAttribute('readonly', '');
+  field.style.position = 'fixed';
+  field.style.opacity = '0';
+  document.body.appendChild(field);
+  field.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { ok = false; }
+  document.body.removeChild(field);
+  return ok;
+}
+
+/** Shows the remembered launcher path and copy actions once a home is known. */
+function renderBridgeHome() {
+  const path = $('bridge-path'), actions = $('bridge-actions');
+  if (!bridgeHome) { path.hidden = true; actions.hidden = true; return; }
+  const win = isWindows(bridgeHome);
+  path.textContent = launcherPath(bridgeHome, win);
+  path.hidden = false;
+  actions.hidden = false;
+}
+
+function flashCopied(btn, label) {
+  const original = btn.textContent;
+  btn.textContent = 'Copied';
+  setTimeout(() => { btn.textContent = original; }, 2000);
+}
+
+$('bridge-copy-path').onclick = (e) => {
+  if (!bridgeHome) return;
+  if (copyText(launcherPath(bridgeHome, isWindows(bridgeHome)))) flashCopied(e.currentTarget);
+};
+$('bridge-copy-command').onclick = (e) => {
+  if (!bridgeHome) return;
+  if (copyText(terminalCommand(bridgeHome, isWindows(bridgeHome)))) flashCopied(e.currentTarget);
+};
+
+/** Remembers a newly-learned bridge folder, in the plugin's own clientStorage. */
+function setBridgeHome(path) {
+  if (!path || path === bridgeHome) return;
+  bridgeHome = path;
+  parent.postMessage({ pluginMessage: { type: 'rememberBridgeHome', path } }, '*');
+  renderBridgeHome();
+}
+
+/* Pre-flight bridge check. The bridge is a separate local process the designer
+   starts, and a Figma plugin cannot start it (sandboxed — no shell), so the
+   least we can do is SAY it is down on open instead of letting a whole deck
+   extract and only failing at publish. Hits the bridge's own /health route.
+   The AbortController matters: the bridge sets no timeout of its own and a dead
+   loopback port can hang rather than refuse fast, which would stall the UI. */
+async function probeBridge() {
+  const warn = $('bridge-warn'), text = $('bridge-warn-text'), btn = $('bridge-recheck');
+  btn.disabled = true;
+  btn.textContent = 'Checking…';
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 1500);
+    const r = await fetch(BRIDGE + '/health', { signal: ctl.signal });
+    clearTimeout(t);
+    if (!r.ok) throw new Error('health ' + r.status);
+    const j = await r.json().catch(() => ({}));
+    if (typeof j.home === 'string' && j.home) setBridgeHome(j.home);
+    warn.hidden = true;
+  } catch {
+    text.textContent = 'The local bridge is not running, so publishing will not work yet. ' +
+      (bridgeHome
+        ? 'Double-click the file below, or paste the command in a terminal, then click Check again.'
+        : 'Double-click "Start Bridge" (Start Bridge.cmd on Windows, Start Bridge.command on Mac) ' +
+          'in the plugin folder, leave that window open, then click Check again below.');
+    warn.hidden = false;
+    renderBridgeHome();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Check again';
+  }
+}
+// Re-run the same probe on demand — the plugin cannot poll on its own (Figma
+// suspends timers in a hidden panel), so a designer who starts the bridge
+// after opening the plugin needs a manual way to clear the banner.
+$('bridge-recheck').onclick = () => probeBridge();
+
+/* Sum of what actually ships to the bridge — every uploaded bitmap plus every
+   supplied video file — so the UI can warn before a doomed publish. */
+function payloadBytes() {
+  let img = 0, vid = 0;
+  if (payload) for (const u of payload.uploads) { const a = assets.get(u.key); if (a) img += a.size; }
+  for (const f of videoFiles.values()) vid += f.size;
+  return { img, vid, total: img + vid };
+}
+
+/* -------------------------------------------------------- pixel checks */
+
+async function measure(bytes) {
+  const bmp = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: 'image/png' }));
+  // Read dimensions BEFORE close() — a closed ImageBitmap reports 0x0, which
+  // would zero every export size and fail every anchor check.
+  const pxW = bmp.width, pxH = bmp.height;
+  const cv = document.createElement('canvas');
+  cv.width = pxW; cv.height = pxH;
+  const cx = cv.getContext('2d', { willReadFrequently: true });
+  cx.drawImage(bmp, 0, 0);
+  const d = cx.getImageData(0, 0, pxW, pxH).data;
+  let alphaMax = 0;
+  for (let i = 3; i < d.length; i += 4) {
+    if (d[i] > alphaMax) { alphaMax = d[i]; if (alphaMax === 255) break; }
+  }
+  bmp.close && bmp.close();
+  // The BYTES are kept, not just the measurements. They are what actually gets
+  // published — an earlier build measured and discarded them, so the bridge
+  // rendered a deck whose every image 404'd and every slide came out blank.
+  return { pxW, pxH, alphaMax, size: bytes.length, bytes };
+}
+
+/** Uint8Array/array -> base64, chunked so a large layer cannot blow the stack. */
+function toBase64(bytes) {
+  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let s = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < arr.length; i += CHUNK) {
+    s += String.fromCharCode.apply(null, arr.subarray(i, i + CHUNK));
+  }
+  return btoa(s);
+}
+
+/** Render bounds first — Phase 0 settled it. Box only as an assertion fallback. */
+function pickAnchor(box, render, exW, exH) {
+  const cands = [];
+  if (render) cands.push({ which: 'render', r: render });
+  if (box) cands.push({ which: 'box', r: box });
+  let best = null;
+  for (const c of cands) {
+    const err = Math.max(Math.abs(c.r.w - exW), Math.abs(c.r.h - exH));
+    if (err <= ANCHOR_TOL) return { which: c.which, rect: c.r, err, ok: true };
+    if (!best || err < best.err) best = { which: c.which, rect: c.r, err };
+  }
+  if (best) best.ok = false;
+  return best;
+}
+
+/* ------------------------------------------------------------ assembly */
+
+function assemble() {
+  let kept = 0, dropped = 0, anchorOk = 0, anchorWarn = 0, missing = 0;
+  const anchorBy = { render: 0, box: 0 };
+  const slidesOut = [];
+  // Which decoded blob belongs at which path in the published deck.
+  const uploads = [];
+
+  // One layer or one part — identical treatment. Parts are ALTERNATES: a layer
+  // or its parts, never both, or the group paints twice.
+  function resolve(L, slideNo, idx, prefix) {
+    const a = assets.get('layer:' + L.id);
+    if (!a) { missing++; warnings.push('slide ' + slideNo + '/' + L.name + ': no bitmap — MISSING from the deck'); return null; }
+    if (a.alphaMax === 0) { dropped++; return null; }
+    const exW = a.pxW / SCALE, exH = a.pxH / SCALE;
+    const an = pickAnchor(L.box, L.render, exW, exH);
+    if (!an) { warnings.push('slide ' + slideNo + '/' + L.name + ': no rect at all'); return null; }
+    an.ok ? anchorOk++ : anchorWarn++;
+    anchorBy[an.which] = (anchorBy[an.which] || 0) + 1;
+    if (!an.ok) warnings.push('slide ' + slideNo + '/' + L.name + ': export ' + exW + 'x' + exH +
+      ' matches neither rect (best ' + an.which + ', off by ' + an.err.toFixed(2) + 'px)');
+    const src = prefix + String(slideNo).padStart(2, '0') + '-' +
+                String(idx).padStart(2, '0') + '-' + L.slug + '.png';
+    uploads.push({ path: src, key: 'layer:' + L.id });
+    return {
+      id: L.id, name: L.name, type: L.type,
+      x: an.rect.x, y: an.rect.y, w: exW, h: exH,
+      full: L.full, anchor: an.which, kids: L.kids || 0,
+      src: src,
+      i: idx,
+      /* Figma's child index — its Z-ORDER. Dropped here until now, which meant
+         paint order silently became REVEAL order (revealOrder() reorders for
+         the animation) and a video overlay always landed on top of everything.
+         Carried through so the deck can paint in Figma's order. */
+      order: L.order,
+    };
+  }
+
+  for (const s of plan.slides) {
+    const layers = [];
+    for (const L of s.layers) {
+      const out = resolve(L, s.no, layers.length, 'layers/');
+      if (!out) continue;
+      if (L.parts && L.parts.length > 1) {
+        const parts = [];
+        for (const P of L.parts) {
+          const p = resolve(P, s.no, parts.length, 'parts/');
+          if (p) parts.push(p);
+        }
+        if (parts.length > 1) out.parts = parts;
+      }
+      layers.push(out); kept++;
+    }
+    const flat = 'flat/' + String(s.no).padStart(2, '0') + '.png';
+    if (assets.has('flat:' + s.no)) uploads.push({ path: flat, key: 'flat:' + s.no });
+    slidesOut.push({
+      no: s.no, id: s.id, name: s.name, w: s.w, h: s.h, bg: s.bg,
+      flat, layers, links: s.links, videos: s.videos, rawOrder: s.rawOrder, census: s.census,
+    });
+  }
+
+  const linkRows = slidesOut.flatMap(s => s.links.map((l, i) => ({ ...l, slide: s.no, key: s.no + ':' + i })));
+  const videoRows = slidesOut.flatMap(s => s.videos.map(v => ({ ...v, slide: s.no })));
+  const grainRows = slidesOut.flatMap(s => s.layers.filter(l => l.parts)
+    .map(l => ({ slide: s.no, id: l.id, name: l.name, parts: l.parts.length })));
+
+  return { slides: slidesOut, linkRows, videoRows, grainRows, uploads,
+           stats: { kept, dropped, anchorOk, anchorWarn, missing, anchorBy } };
+}
+
+/* -------------------------------------------------------------- render */
+
+function renderReview() {
+  const st = payload.stats;
+  const notes = $('review-notes'); notes.innerHTML = '';
+
+  if (st.missing) note(notes, 'bad', st.missing + ' layer(s) missing from the deck',
+    'A dropped layer is invisible in the output. Do not publish this.');
+  if (st.anchorWarn) note(notes, 'bad', st.anchorWarn + ' layer(s) match neither rect',
+    'Their position is a guess — see extraction details.');
+
+  const internal = payload.linkRows.filter(l => l.internal);
+  if (internal.length) note(notes, 'warn',
+    internal.length + ' internal link' + (internal.length > 1 ? 's' : '') + ' excluded by default',
+    'These point at working documents, not client destinations. Include one only on purpose.');
+
+  const anim = images.filter(i => i.animated);
+  if (anim.length) note(notes, 'bad', anim.length + ' animated image fill(s)',
+    'These ship as a still frame today. Phase 3 sends the original bytes instead.');
+
+  if (!st.missing && !st.anchorWarn) note(notes, 'ok',
+    st.kept + ' layers, all anchored within 1px',
+    plan.meta.slideCount + ' slides · ' + st.dropped + ' empty frames dropped');
+
+  const sz = payloadBytes();
+  if (sz.total > MAX_DECK_MB * 1048576) note(notes, 'bad',
+    'This deck is ' + (sz.total / 1048576).toFixed(0) + ' MB — Surge will likely reject it',
+    (sz.vid / 1048576).toFixed(0) + ' MB of that is video. Surge is a static host, not a video CDN, ' +
+    'and fails a very large deploy only after the whole upload finishes. Compress the clips to web ' +
+    'MP4 (H.264) and republish — a web-encoded clip is usually a few MB.');
+
+  /* links */
+  $('blk-links').hidden = !payload.linkRows.length;
+  $('n-links').textContent = payload.linkRows.length + (internal.length ? ' · ' + internal.length + ' internal' : '');
+  const tb = $('tb-links'); tb.innerHTML = '';
+  for (const l of payload.linkRows) {
+    if (!linkOn.has(l.key)) linkOn.set(l.key, !l.internal);   // internal defaults OFF
+    const tr = document.createElement('tr');
+    /* `hidden` is tagged, not filtered. The link ships — that is the point of
+       putting one on a hidden layer — but an invisible clickable area over a
+       slide is exactly the kind of thing that should never arrive unannounced,
+       so it is named here and can be unchecked like any other. */
+    /* `from name` says the URL came from the LAYER NAME rather than Figma
+       hyperlink metadata. Same include/exclude control as any other row — the
+       chip only explains where it came from, because a link with no native
+       hyperlink behind it should not look identical to one that has. */
+    const tags = (l.internal ? '<span class="tag bad">internal</span> ' : '') +
+                 (l.hidden ? '<span class="tag info">hidden layer</span> ' : '') +
+                 (l.via === 'name' ? '<span class="tag info">from name</span> ' : '') +
+                 (l.partial ? '<span class="tag warn">partial</span> ' : '') +
+                 (l.linkType === 'NODE' ? '<span class="tag info">slide jump</span> ' : '');
+    tr.innerHTML = '<td class="slide">' + l.slide + '</td>' +
+      '<td><div class="name">' + tags + esc(l.text || l.nodeName) + '</div>' +
+      '<div class="url">' + esc(l.value) + '</div></td>' +
+      // No repeated "include" label — the column header already says it, and the
+      // extra word pushed the control out of line with its own heading.
+      '<td><input type="checkbox"' + (linkOn.get(l.key) ? ' checked' : '') +
+      ' data-k="' + l.key + '" aria-label="Include the link on slide ' + l.slide +
+      ' to ' + esc(l.value) + '"></td>';
+    tb.appendChild(tr);
+  }
+  tb.onchange = e => {
+    const k = e.target.getAttribute('data-k');
+    if (k) linkOn.set(k, e.target.checked);
+  };
+
+  /* videos */
+  $('blk-videos').hidden = !payload.videoRows.length;
+  $('n-videos').textContent = payload.videoRows.length;
+  const vb = $('tb-videos'); vb.innerHTML = '';
+  for (const v of payload.videoRows) {
+    const tr = document.createElement('tr');
+    const got = videoFiles.get(v.nodeId);
+    const fmt = got ? videoFormat(got.name) : null;
+    /* Each slot is judged on its OWN file — one slide can mix .mov, .webm and
+       .mp4. The note is advisory: no alternate encode is ever required, but a
+       container some browsers refuse should not ship unremarked. */
+    const note = fmt && fmt.warn
+      ? '<div class="url" style="color:var(--warn)">⚠ ' + esc(fmt.warn) + '</div>' : '';
+    const bad = fmt && fmt.unsupported
+      ? '<div class="url" style="color:var(--bad)">✕ ' + esc(fmt.unsupported) + '</div>' : '';
+    const sizeWarn = got && got.size > BIG_CLIP_MB * 1048576
+      ? '<div class="url" style="color:var(--bad)">✕ ' + (got.size / 1048576).toFixed(1) +
+        ' MB is too large for Surge — compress to web MP4, aim under ' + BIG_CLIP_MB + ' MB</div>' : '';
+    tr.innerHTML = '<td class="slide">' + v.slide + '</td>' +
+      '<td><div class="name">' + esc(v.nodeName) + '</div>' +
+      '<div class="url">' + (v.rect ? v.rect.w + '×' + v.rect.h : '?') + ' · ' + esc(v.scaleMode || '') + '</div></td>' +
+      '<td style="width:55%"><div class="drop' + (got ? ' has' : '') + '" tabindex="0" data-n="' +
+      esc(v.nodeId) + '">' + (got ? esc(got.name) + ' · ' + (got.size / 1048576).toFixed(1) + ' MB'
+                                  : 'Drop the video file, or click to choose') + '</div>' +
+      note + bad + sizeWarn + '</td>';
+    vb.appendChild(tr);
+  }
+  vb.querySelectorAll('.drop').forEach(wireDrop);
+
+  /* grain */
+  $('blk-grain').hidden = !payload.grainRows.length;
+  const fine = payload.stats.kept - payload.grainRows.length +
+               payload.grainRows.reduce((a, g) => a + g.parts, 0);
+  $('n-grain').textContent = 'coarse ' + payload.stats.kept + ' · fine ' + fine;
+  const gb = $('tb-grain'); gb.innerHTML = '';
+  for (const g of payload.grainRows) {
+    if (!grainOf.has(g.id)) grainOf.set(g.id, 'auto');
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td class="slide">' + g.slide + '</td>' +
+      '<td><div class="name">' + esc(g.name) + '</div>' +
+      '<div class="url">1 layer or ' + g.parts + ' parts</div></td>' +
+      '<td><select data-g="' + esc(g.id) + '">' +
+      ['auto', 'coarse', 'fine'].map(o => '<option value="' + o + '"' +
+        (grainOf.get(g.id) === o ? ' selected' : '') + '>' +
+        (o === 'auto' ? 'Auto' : o === 'coarse' ? 'Whole' : 'Split') + '</option>').join('') +
+      '</select></td>';
+    gb.appendChild(tr);
+  }
+  gb.onchange = e => {
+    const id = e.target.getAttribute('data-g');
+    if (id) grainOf.set(id, e.target.value);
+  };
+
+  $('details').textContent = detailText();
+  refreshPrimary();
+}
+
+const esc = s => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+function detailText() {
+  const st = payload.stats, out = [];
+  out.push('anchor      : render=' + st.anchorBy.render + '  box=' + st.anchorBy.box +
+           '  ok=' + st.anchorOk + '  off=' + st.anchorWarn);
+  out.push('layers      : ' + st.kept + ' kept, ' + st.dropped + ' dropped (alpha max 0)');
+  const cen = { types: {}, fills: {} };
+  for (const s of payload.slides) {
+    if (!s.census) continue;
+    for (const k in s.census.types) cen.types[k] = (cen.types[k] || 0) + s.census.types[k];
+    for (const k in s.census.fills) cen.fills[k] = (cen.fills[k] || 0) + s.census.fills[k];
+  }
+  const f = o => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, v]) => k + '=' + v).join('  ');
+  out.push('node types  : ' + f(cen.types));
+  out.push('fill types  : ' + f(cen.fills));
+  const byFmt = {}; images.forEach(i => { byFmt[i.format] = (byFmt[i.format] || 0) + 1; });
+  out.push('image fills : ' + images.length + ' distinct  ' + f(byFmt) +
+           '  animated=' + images.filter(i => i.animated).length);
+  if (probeLine) out.push(probeLine);
+  if (warnings.length) { out.push(''); out.push('warnings (' + warnings.length + '):'); warnings.forEach(w => out.push('  ' + w)); }
+  return out.join('\n');
+}
+
+/* --------------------------------------------------------- video drops */
+
+/**
+ * What a supplied container means for playback, per file.
+ *
+ * Advisory only — the designer supplies the ONE file they have, and different
+ * slots may legitimately use different formats on the same slide. This never
+ * asks for an alternate encode; it just refuses to let a container that some
+ * browsers cannot play ship without a word.
+ *
+ *   mp4  (H.264/AAC)  every browser
+ *   webm (VP8/VP9)    Chrome, Firefox, Edge — Safari only VP9, 14.1+/iOS 14.5+
+ *   mov  (QuickTime)  Safari yes, Chrome usually (H.264 inside), Firefox never
+ */
+const VIDEO_FORMATS = {
+  mp4:  { type: 'video/mp4' },
+  m4v:  { type: 'video/mp4' },
+  webm: { type: 'video/webm',
+          warn: 'WebM does not play in older Safari (VP9 needs 14.1+ / iOS 14.5+; VP8 never). MP4 plays everywhere.' },
+  mov:  { type: 'video/quicktime',
+          warn: 'QuickTime does not play in Firefox at all. Chrome usually plays it when it wraps H.264. MP4 plays everywhere.' },
+  qt:   { type: 'video/quicktime',
+          warn: 'QuickTime does not play in Firefox at all. MP4 plays everywhere.' },
+  ogv:  { type: 'video/ogg', warn: 'Ogg does not play in Safari. MP4 plays everywhere.' },
+  ogg:  { type: 'video/ogg', warn: 'Ogg does not play in Safari. MP4 plays everywhere.' },
+};
+
+function videoFormat(name) {
+  const m = /\.([a-z0-9]+)$/i.exec(String(name || ''));
+  const ext = m ? m[1].toLowerCase() : '';
+  const f = VIDEO_FORMATS[ext];
+  if (!f) {
+    return { unsupported: (ext ? '.' + ext : 'This file') +
+      ' is not a supported video container — publishing will refuse it. Use .mp4, .webm or .mov.' };
+  }
+  return f;
+}
+
+function wireDrop(el) {
+  const nodeId = el.getAttribute('data-n');
+  const pick = () => {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'video/*';
+    inp.onchange = () => inp.files[0] && take(inp.files[0]);
+    inp.click();
+  };
+  const take = async (file) => {
+    const buf = await file.arrayBuffer();
+    videoFiles.set(nodeId, { name: file.name, size: file.size, bytes: Array.from(new Uint8Array(buf)) });
+    renderReview();
+  };
+  el.onclick = pick;
+  el.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } };
+  el.ondragover = e => { e.preventDefault(); el.classList.add('over'); };
+  el.ondragleave = () => el.classList.remove('over');
+  el.ondrop = e => {
+    e.preventDefault(); el.classList.remove('over');
+    const f = e.dataTransfer.files[0];
+    if (f) take(f);
+  };
+}
+
+/* ------------------------------------------------------------- actions */
+
+$('proj').oninput = syncSlug;
+// Form-less layout, so Enter must be wired explicitly — gated on the same
+// readiness as the primary button.
+$('proj').onkeydown = e => {
+  if (e.key === 'Enter' && validSlug(slug())) { e.preventDefault(); $('primary').click(); }
+};
+
+$('secondary').onclick = () => show('idle');
+
+$('primary').onclick = () => {
+  if (state === 'idle') {
+    assets = new Map(); images = []; warnings = []; plan = null; payload = null;
+    probeLine = '';
+    linkOn.clear(); grainOf.clear();
+    $('busylabel').textContent = 'Extracting the deck';
+    $('bar').firstElementChild.style.width = '0';
+    show('busy');
+    parent.postMessage({ pluginMessage: { type: 'extract' } }, '*');
+  } else if (state === 'review') {
+    publish();
+  } else if (state === 'done') {
+    show('idle');
+  }
+};
+
+/** Send the decoded bitmaps to the bridge, batched by size, with progress. */
+async function stageAssets(project) {
+  const list = payload.uploads.filter(u => assets.get(u.key) && assets.get(u.key).bytes);
+  if (!list.length) throw new Error('no bitmaps to upload — nothing was decoded');
+
+  const begin = await fetch(BRIDGE + '/stage/begin', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project }),
+  });
+  if (!begin.ok) throw new Error('bridge refused staging (' + begin.status + ')');
+
+  const BATCH_BYTES = 6 * 1024 * 1024;   // one request per ~6MB of raw bitmap
+  let batch = [], batchSize = 0, sent = 0;
+
+  const flush = async () => {
+    if (!batch.length) return;
+    const res = await fetch(BRIDGE + '/stage/asset', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project, files: batch }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error('upload failed: ' + (j.error || res.status));
+    }
+    sent += batch.length;
+    $('status').textContent = 'uploading ' + sent + ' of ' + list.length + ' images';
+    $('bar').firstElementChild.style.width = (sent / list.length * 70).toFixed(1) + '%';
+    batch = []; batchSize = 0;
+  };
+
+  for (const u of list) {
+    const a = assets.get(u.key);
+    batch.push({ path: u.path, b64: toBase64(a.bytes) });
+    batchSize += a.size;
+    if (batchSize >= BATCH_BYTES) await flush();
+  }
+  await flush();
+  return list.length;
+}
+
+async function publish() {
+  $('busylabel').textContent = 'Publishing to ' + slug() + '.surge.sh';
+  $('status').textContent = 'Uploading images to the local bridge…';
+  $('bar').firstElementChild.style.width = '2%';
+  show('busy');
+
+  try {
+    await stageAssets(slug());
+  } catch (err) {
+    show('review');
+    publishError(err, 'Nothing was published.');
+    return;
+  }
+
+  $('status').textContent = 'Building and deploying…';
+  $('bar').firstElementChild.style.width = '80%';
+
+  const body = {
+    project: slug(),
+    // The bridge fails closed: without this it builds and stops. Only the
+    // Publish button sets it, so nothing reaches a public URL by accident.
+    deploy: true,
+    meta: plan.meta,
+    slides: payload.slides,
+    links: payload.linkRows.filter(l => linkOn.get(l.key)),
+    grain: [...grainOf.entries()].map(([id, g]) => ({ id, grain: g })),
+    videos: payload.videoRows.map(v => ({ ...v, file: videoFiles.get(v.nodeId) || null })),
+  };
+
+  try {
+    const res = await fetch(BRIDGE + '/publish', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    /* Read the BODY, not just the status. The bridge puts the real reason in
+       `error` (already token-scrubbed by deploy.mjs) — surge's own words for a
+       refused domain, the named list of missing bitmaps, and so on. Throwing
+       away that message turned an actionable failure into a bare "500", which
+       is exactly how a taken domain name reached a designer as a mystery. The
+       staging path above has always read the body; this one had not. */
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error || ('bridge returned ' + res.status));
+    }
+    const out = await res.json();
+    if (!out.url) throw new Error('bridge returned no url');
+    $('liveurl').textContent = out.url;
+    $('liveurl').href = out.url;
+    show('done');
+  } catch (err) {
+    show('review');
+    publishError(err);
+  }
+}
+
+function publishError(err, extra) {
+  const notes = $('review-notes');
+  // Replace any previous failure rather than stacking one per attempt.
+  const old = notes.querySelector('[data-publish-error]');
+  if (old) old.remove();
+  const offline = /Failed to fetch|NetworkError|refused/i.test(err.message);
+  /* Every <name>.surge.sh is global and first-come, so a plausible project name
+     can belong to a stranger. Surge's own wording for that is "you do not have
+     permission to publish to …", which does not obviously mean "pick another
+     name" unless you already know how surge works. */
+  const notYours = /do not have permission to publish|insufficient permission/i.test(err.message);
+  note(notes, 'bad', 'Could not publish — ' + err.message,
+    (extra ? extra + ' ' : '') + (offline
+      ? 'The local bridge does not appear to be running. Double-click "Start Bridge" ' +
+        '(Start Bridge.cmd on Windows, Start Bridge.command on Mac) in the plugin folder, ' +
+        'leave that window open, and publish again. (Advanced: node bridge/server.mjs.)'
+      : notYours
+      ? slug() + '.surge.sh already belongs to another Surge account — the names are ' +
+        'global and first-come, not reserved for us. Nothing was published. Choose a ' +
+        'more specific project name and publish again; the extraction above is unaffected.'
+      : (payloadBytes().total > MAX_DECK_MB * 1048576
+        ? 'The deck is ' + (payloadBytes().total / 1048576).toFixed(0) + ' MB (mostly video), and ' +
+          'Surge rejects very large deploys. Compress the video clips to web MP4 and republish; ' +
+          'the extraction above is unaffected.'
+        : 'Everything above extracted correctly; the publish step failed.')));
+  const added = notes.lastElementChild;
+  added.setAttribute('data-publish-error', '');
+  added.scrollIntoView({ block: 'nearest' });     // the error, not the first note
+}
+
+/* -------------------------------------------------------- plugin bus */
+
+onmessage = async (e) => {
+  const m = e.data.pluginMessage;
+  if (!m) return;
+
+  if (m.type === 'bridgeHome') {
+    if (m.path) { bridgeHome = m.path; renderBridgeHome(); }
+    return;
+  }
+
+  if (m.type === 'fatal') {
+    show('review');
+    $('review-notes').innerHTML = '';
+    note($('review-notes'), 'bad', 'Extraction failed', m.error);
+    return;
+  }
+  if (m.type === 'warn')   { warnings.push(m.text); return; }
+  /* Not a warning — a factual account of what the link sweep visited. It tells
+     "never reached the node" apart from "reached it and found nothing", which
+     are indistinguishable from a missing Links section alone. */
+  if (m.type === 'probe')  { probeLine = m.text; return; }
+  if (m.type === 'status') { $('status').textContent = m.text; return; }
+  if (m.type === 'image')  { images.push(m); return; }
+
+  if (m.type === 'plan') {
+    plan = m;
+    $('scope').textContent = m.meta.file + ' · ' + m.meta.slideCount + ' slides · ' +
+      (m.meta.slideSize || '') + ' · ordered by ' + (m.meta.orderedBy || '?');
+    return;
+  }
+
+  if (m.type === 'asset') {
+    const key = m.kind === 'flat' ? 'flat:' + m.slide : 'layer:' + m.layerId;
+    const bytes = m.bytes, done = m.done, total = m.total;
+    // Serialised: handling these concurrently loses whichever decode is still in
+    // flight when `done` arrives — always the last layer of the last slide.
+    work = work.then(async () => {
+      try { assets.set(key, await measure(bytes)); }
+      catch (err) { warnings.push(key + ': decode failed — ' + err.message); }
+      $('bar').firstElementChild.style.width = (done / total * 100).toFixed(1) + '%';
+      $('status').textContent = 'exported ' + done + ' of ' + total;
+    });
+    return;
+  }
+
+  if (m.type !== 'done') return;
+  $('status').textContent = 'Checking every layer…';
+  await work;                                   // drain pending decodes
+  payload = assemble();
+  renderReview();
+  show('review');
+  probeBridge();                                // re-check: a bridge started after open clears the banner before Publish
+};
+
+syncSlug();
+parent.postMessage({ pluginMessage: { type: 'getBridgeHome' } }, '*');  // last-known path, if any
+probeBridge();                                  // tell the designer up front if the bridge is down
+</script>
